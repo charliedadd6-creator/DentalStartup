@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwiftSlot — Clinical Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --navy-900:#0d1b3e;
+  --navy-800:#112252;
+  --navy-700:#1a3166;
+  --navy-600:#1e3a8a;
+  --navy-500:#2563eb;
+  --navy-400:#3b82f6;
+  --navy-300:#93c5fd;
+  --sidebar-w:220px;
+  --topbar-h:56px;
+  --white:#ffffff;
+  --gray-50:#f8fafc;
+  --gray-100:#f1f5f9;
+  --gray-200:#e2e8f0;
+  --gray-300:#cbd5e1;
+  --gray-400:#94a3b8;
+  --gray-500:#64748b;
+  --gray-600:#475569;
+  --gray-700:#334155;
+  --gray-800:#1e293b;
+  --gray-900:#0f172a;
+  --teal-500:#0d9488;
+  --teal-400:#14b8a6;
+  --teal-100:#ccfbf1;
+  --teal-50:#f0fdfa;
+  --green-500:#22c55e;
+  --green-100:#dcfce7;
+  --green-700:#15803d;
+  --amber-500:#f59e0b;
+  --amber-100:#fef3c7;
+  --amber-700:#b45309;
+  --red-500:#ef4444;
+  --red-100:#fee2e2;
+  --red-700:#b91c1c;
+  --purple-500:#8b5cf6;
+  --purple-100:#ede9fe;
+  --blue-500:#3b82f6;
+  --blue-100:#dbeafe;
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.06),0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md:0 4px 6px rgba(0,0,0,0.07),0 2px 4px rgba(0,0,0,0.05);
+  --shadow-lg:0 10px 15px rgba(0,0,0,0.08),0 4px 6px rgba(0,0,0,0.04);
+}
+html{font-size:13px;-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--gray-100);color:var(--gray-800);display:flex;min-height:100vh;overflow-x:hidden}
+
+/* ═══════════════════════════════════════
+   SIDEBAR
+═══════════════════════════════════════ */
+.sidebar{
+  width:var(--sidebar-w);flex-shrink:0;
+  background:var(--navy-900);
+  display:flex;flex-direction:column;
+  min-height:100vh;position:fixed;left:0;top:0;bottom:0;
+  z-index:200;
+  box-shadow:2px 0 8px rgba(0,0,0,0.3);
+}
+.sidebar-brand{
+  height:var(--topbar-h);display:flex;align-items:center;
+  gap:10px;padding:0 18px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  flex-shrink:0;
+}
+.brand-icon{
+  width:32px;height:32px;border-radius:8px;
+  background:linear-gradient(135deg,var(--teal-500),var(--navy-500));
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.brand-text{display:flex;flex-direction:column}
+.brand-name{font-size:14px;font-weight:800;color:var(--white);letter-spacing:-0.3px;line-height:1}
+.brand-sub{font-size:9px;color:rgba(255,255,255,0.35);font-weight:400;margin-top:2px;letter-spacing:0.3px}
+
+.sidebar-nav{flex:1;padding:16px 0;overflow-y:auto}
+.nav-group-label{
+  font-size:9px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;color:rgba(255,255,255,0.25);
+  padding:0 18px;margin:16px 0 6px;
+}
+.nav-group-label:first-child{margin-top:0}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 18px;margin:1px 8px;border-radius:8px;
+  font-size:12px;font-weight:500;color:rgba(255,255,255,0.55);
+  cursor:pointer;transition:all 150ms;text-decoration:none;
+  border:none;background:none;width:calc(100% - 16px);text-align:left;
+  font-family:'Inter',sans-serif;
+}
+.nav-item:hover{background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.85)}
+.nav-item.active{background:rgba(37,99,235,0.25);color:var(--white);font-weight:600}
+.nav-item.active .nav-icon{color:var(--navy-300)}
+.nav-icon{width:16px;height:16px;flex-shrink:0;opacity:0.7}
+.nav-item.active .nav-icon{opacity:1}
+.nav-badge{
+  margin-left:auto;background:var(--navy-500);color:var(--white);
+  font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;
+}
+
+.sidebar-footer{
+  padding:12px 8px;border-top:1px solid rgba(255,255,255,0.06);
+  flex-shrink:0;
+}
+.sidebar-user{
+  display:flex;align-items:center;gap:10px;padding:8px 10px;
+  border-radius:8px;cursor:pointer;transition:background 150ms;
+}
+.sidebar-user:hover{background:rgba(255,255,255,0.06)}
+.user-avatar{
+  width:30px;height:30px;border-radius:50%;
+  background:linear-gradient(135deg,var(--teal-500),var(--navy-500));
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;color:var(--white);flex-shrink:0;
+}
+.user-info{flex:1;min-width:0}
+.user-name{font-size:11px;font-weight:600;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-role{font-size:10px;color:rgba(255,255,255,0.35);white-space:nowrap}
+.conn-pip{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--green-500);flex-shrink:0;
+  animation:pip-pulse 2s ease-in-out infinite;
+}
+.conn-pip.warn{background:var(--amber-500);animation:none}
+@keyframes pip-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* ═══════════════════════════════════════
+   MAIN AREA
+═══════════════════════════════════════ */
+.main{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;min-height:100vh}
+
+/* TOPBAR */
+.topbar{
+  height:var(--topbar-h);background:var(--white);
+  border-bottom:1px solid var(--gray-200);
+  display:flex;align-items:center;padding:0 24px;gap:16px;
+  position:sticky;top:0;z-index:100;
+  box-shadow:var(--shadow-sm);
+}
+.topbar-title{
+  font-size:15px;font-weight:700;color:var(--gray-900);letter-spacing:-0.3px;
+}
+.topbar-sub{font-size:12px;color:var(--gray-400);margin-top:1px}
+.topbar-center{flex:1;display:flex;justify-content:center}
+.practice-badge{
+  display:flex;align-items:center;gap:8px;
+  background:var(--gray-50);border:1px solid var(--gray-200);
+  border-radius:8px;padding:6px 14px;cursor:pointer;
+  transition:border-color 150ms;
+}
+.practice-badge:hover{border-color:var(--gray-300)}
+.practice-badge-icon{color:var(--navy-500)}
+.practice-name-input{
+  border:none;background:transparent;outline:none;
+  font-family:'Inter',sans-serif;font-size:13px;font-weight:600;
+  color:var(--gray-700);width:180px;text-align:center;
+}
+.practice-name-input::placeholder{color:var(--gray-400)}
+.topbar-right{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.topbar-clock{
+  font-family:'SF Mono','Fira Code',monospace;
+  font-size:12px;font-weight:500;color:var(--gray-500);
+  background:var(--gray-50);border:1px solid var(--gray-200);
+  border-radius:6px;padding:4px 10px;
+}
+.topbar-conn{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-500)}
+.topbar-conn-dot{width:7px;height:7px;border-radius:50%;background:var(--green-500);animation:pip-pulse 2s ease-in-out infinite}
+.topbar-conn-dot.warn{background:var(--amber-500);animation:none}
+
+/* ═══════════════════════════════════════
+   PAGE CONTENT
+═══════════════════════════════════════ */
+.page-content{padding:24px;flex:1}
+
+.page-header{margin-bottom:20px}
+.page-header-title{font-size:20px;font-weight:700;color:var(--gray-900);letter-spacing:-0.4px}
+.page-header-sub{font-size:12px;color:var(--gray-400);margin-top:3px}
+
+/* DEGRADED BANNER */
+.deg-banner{
+  background:#fffbeb;border:1px solid #fde68a;
+  border-radius:10px;padding:10px 16px;margin-bottom:16px;
+  display:none;align-items:center;gap:10px;font-size:12px;color:#92400e;
+}
+.deg-banner.show{display:flex}
+.deg-banner-close{margin-left:auto;background:none;border:none;cursor:pointer;color:#d97706;padding:2px;font-size:16px;line-height:1}
+
+/* ═══════════════════════════════════════
+   METRIC CARDS ROW
+═══════════════════════════════════════ */
+.metrics-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:20px}
+.metric-card{
+  background:var(--white);border-radius:12px;
+  border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);
+  padding:16px 18px;transition:box-shadow 150ms,transform 150ms;
+  cursor:default;
+}
+.metric-card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.metric-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px}
+.metric-icon-wrap{
+  width:36px;height:36px;border-radius:9px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.metric-icon-wrap.blue{background:var(--blue-100)}
+.metric-icon-wrap.teal{background:var(--teal-100)}
+.metric-icon-wrap.green{background:var(--green-100)}
+.metric-icon-wrap.amber{background:var(--amber-100)}
+.metric-icon-wrap.purple{background:var(--purple-100)}
+.metric-icon-wrap svg{width:18px;height:18px}
+.metric-icon-wrap.blue svg{color:#2563eb}
+.metric-icon-wrap.teal svg{color:var(--teal-500)}
+.metric-icon-wrap.green svg{color:var(--green-700)}
+.metric-icon-wrap.amber svg{color:var(--amber-700)}
+.metric-icon-wrap.purple svg{color:var(--purple-500)}
+.metric-dots{color:var(--gray-300);cursor:pointer;font-size:16px;line-height:1}
+.metric-value{font-size:26px;font-weight:800;color:var(--gray-900);letter-spacing:-0.8px;line-height:1;margin-bottom:4px}
+.metric-label{font-size:11px;color:var(--gray-400);font-weight:500}
+.metric-delta{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:10px;font-weight:600;margin-top:6px;
+  padding:2px 6px;border-radius:4px;
+}
+.delta-up{background:var(--green-100);color:var(--green-700)}
+.delta-neutral{background:var(--gray-100);color:var(--gray-500)}
+.delta-down{background:var(--red-100);color:var(--red-700)}
+
+/* ═══════════════════════════════════════
+   TWO COLUMN LOWER
+═══════════════════════════════════════ */
+.lower-grid{display:grid;grid-template-columns:1fr 380px;gap:16px;align-items:start}
+
+/* ═══════════════════════════════════════
+   BROADCAST PANEL (LEFT)
+═══════════════════════════════════════ */
+.panel{
+  background:var(--white);border-radius:12px;
+  border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);overflow:hidden;
+}
+.panel-head{
+  padding:16px 20px;border-bottom:1px solid var(--gray-100);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.panel-head-left{display:flex;align-items:center;gap:10px}
+.panel-head-icon{
+  width:28px;height:28px;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.panel-head-icon.teal{background:var(--teal-100)}
+.panel-head-icon.teal svg{color:var(--teal-500)}
+.panel-head-title{font-size:13px;font-weight:700;color:var(--gray-900)}
+.panel-head-sub{font-size:11px;color:var(--gray-400);margin-top:1px}
+.panel-head-badge{
+  font-size:10px;font-weight:700;letter-spacing:0.3px;
+  padding:3px 8px;border-radius:5px;
+}
+.badge-live{background:#dcfce7;color:#15803d;animation:badge-pulse 2s ease-in-out infinite}
+@keyframes badge-pulse{0%,100%{opacity:1}50%{opacity:0.7}}
+.badge-idle{background:var(--gray-100);color:var(--gray-500)}
+.badge-locked{background:#dbeafe;color:#1d4ed8}
+.badge-declined{background:var(--amber-100);color:var(--amber-700)}
+.badge-expired{background:var(--red-100);color:var(--red-700)}
+
+/* Steps */
+.step-block{padding:16px 20px;border-bottom:1px solid var(--gray-100)}
+.step-block:last-child{border-bottom:none}
+.step-hdr{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.step-circle{
+  width:20px;height:20px;border-radius:50%;flex-shrink:0;
+  background:var(--navy-600);color:var(--white);
+  font-size:10px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+}
+.step-name{font-size:12px;font-weight:700;color:var(--gray-800)}
+.step-desc{font-size:11px;color:var(--gray-400);margin-top:1px}
+
+.input-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.field-label{
+  display:block;font-size:10px;font-weight:700;
+  letter-spacing:0.5px;text-transform:uppercase;
+  color:var(--gray-500);margin-bottom:5px;
+}
+.f-input{
+  width:100%;height:36px;padding:0 11px;
+  border:1px solid var(--gray-200);border-radius:8px;
+  font-family:'Inter',sans-serif;font-size:12px;color:var(--gray-800);
+  background:var(--gray-50);outline:none;
+  transition:border-color 150ms,box-shadow 150ms,background 150ms;
+}
+.f-input:focus{border-color:var(--navy-500);box-shadow:0 0 0 3px rgba(37,99,235,0.1);background:var(--white)}
+.f-input::placeholder{color:var(--gray-300)}
+.f-input:disabled{cursor:not-allowed;opacity:0.6}
+.f-hint{font-size:10px;color:var(--gray-300);margin-top:4px}
+
+/* Tag input */
+.recip-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.r-label{font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--gray-500)}
+.r-meta{display:flex;align-items:center;gap:8px}
+.r-count{
+  font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;
+  background:var(--gray-100);border:1px solid var(--gray-200);color:var(--gray-500);
+}
+.r-count.over{background:var(--red-100);border-color:#fca5a5;color:var(--red-700)}
+.r-clear{font-size:10px;color:var(--gray-300);cursor:pointer;background:none;border:none;font-family:'Inter',sans-serif;transition:color 150ms}
+.r-clear:hover{color:var(--red-500)}
+.r-clear.hidden{visibility:hidden}
+
+.tag-area{
+  min-height:72px;padding:7px;
+  border:1px solid var(--gray-200);border-radius:8px;
+  background:var(--gray-50);cursor:text;
+  display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;
+  transition:border-color 150ms,box-shadow 150ms;
+}
+.tag-area:focus-within{border-color:var(--navy-500);box-shadow:0 0 0 3px rgba(37,99,235,0.1);background:var(--white)}
+.tag-area.locked{cursor:not-allowed;opacity:0.7}
+
+.e-tag{
+  display:inline-flex;align-items:center;gap:4px;
+  background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);
+  color:#1d4ed8;border-radius:5px;padding:2px 7px;
+  font-size:11px;font-weight:500;animation:tag-in 120ms ease;max-width:200px;
+}
+.e-tag span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes tag-in{from{opacity:0;transform:scale(0.88)}to{opacity:1;transform:scale(1)}}
+.e-tag-x{
+  background:none;border:none;cursor:pointer;
+  color:rgba(37,99,235,0.5);padding:0;font-size:14px;
+  line-height:1;display:flex;align-items:center;flex-shrink:0;
+  transition:color 150ms;
+}
+.e-tag-x:hover{color:var(--red-500)}
+.e-tag-x:disabled{cursor:not-allowed;opacity:0.3}
+
+.tag-real{
+  border:none;outline:none;background:transparent;
+  font-family:'Inter',sans-serif;font-size:12px;
+  color:var(--gray-800);min-width:160px;flex:1;padding:2px 4px;
+}
+.tag-real::placeholder{color:var(--gray-300)}
+.tag-real:disabled{cursor:not-allowed}
+.r-hint{font-size:10px;color:var(--gray-300);margin-top:5px}
+
+/* GDPR */
+.gdpr{
+  background:#fffbeb;border:1px solid #fde68a;
+  border-radius:8px;padding:10px 12px;
+  display:flex;gap:8px;margin-bottom:14px;
+}
+.gdpr-txt{font-size:11px;color:#92400e;line-height:1.5}
+
+/* Lock bar */
+.lock-bar{
+  background:var(--teal-50);border:1px solid var(--teal-100);
+  border-radius:8px;padding:8px 12px;
+  display:none;align-items:center;gap:7px;
+  font-size:11px;color:var(--teal-500);font-weight:600;margin-bottom:14px;
+}
+.lock-bar.show{display:flex}
+
+/* Buttons */
+.btn-primary{
+  width:100%;height:38px;
+  background:linear-gradient(135deg,var(--navy-600),var(--navy-500));
+  color:var(--white);border:none;border-radius:8px;
+  font-family:'Inter',sans-serif;font-size:13px;font-weight:700;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;
+  transition:opacity 150ms,transform 80ms,box-shadow 150ms;
+  box-shadow:0 2px 8px rgba(37,99,235,0.3);
+  letter-spacing:0.1px;
+}
+.btn-primary:hover:not(:disabled){opacity:0.92;box-shadow:0 4px 16px rgba(37,99,235,0.4)}
+.btn-primary:active:not(:disabled){transform:scale(0.99)}
+.btn-primary:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none}
+.btn-primary.success{background:linear-gradient(135deg,var(--green-700),var(--green-500));box-shadow:0 2px 8px rgba(34,197,94,0.3)}
+.btn-ghost{
+  width:100%;height:34px;margin-top:8px;
+  background:transparent;color:var(--gray-500);
+  border:1px solid var(--gray-200);border-radius:8px;
+  font-family:'Inter',sans-serif;font-size:12px;font-weight:500;
+  cursor:pointer;transition:background 150ms;display:none;
+}
+.btn-ghost:hover{background:var(--gray-50)}
+.btn-ghost.show{display:block}
+.btn-act{
+  width:100%;height:36px;margin-top:10px;
+  border-radius:8px;border:none;
+  font-family:'Inter',sans-serif;font-size:12px;font-weight:600;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;
+  transition:opacity 150ms;
+}
+.btn-act.navy{background:linear-gradient(135deg,var(--navy-600),var(--navy-500));color:var(--white);box-shadow:0 2px 6px rgba(37,99,235,0.25)}
+.btn-act.navy:hover{opacity:0.9}
+.btn-act.outline{background:transparent;border:1px solid var(--gray-200);color:var(--gray-600)}
+.btn-act.outline:hover{background:var(--gray-50)}
+
+.spin{
+  width:14px;height:14px;border-radius:50%;
+  border:2px solid rgba(255,255,255,0.3);
+  border-top-color:#fff;
+  animation:do-spin 0.65s linear infinite;
+  display:inline-block;flex-shrink:0;
+}
+@keyframes do-spin{to{transform:rotate(360deg)}}
+
+/* ═══════════════════════════════════════
+   RIGHT COLUMN
+═══════════════════════════════════════ */
+.right-col{display:flex;flex-direction:column;gap:14px;position:sticky;top:80px}
+
+/* STATUS PANEL */
+.status-panel{
+  background:var(--white);border-radius:12px;
+  border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);overflow:hidden;
+}
+.sp-head{
+  padding:13px 18px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--gray-100);
+}
+.sp-head-label{font-size:12px;font-weight:700;color:var(--gray-800)}
+.sp-head-sub{font-size:10px;color:var(--gray-400);margin-top:1px}
+
+.sp-idle{padding:32px 18px;text-align:center}
+.sp-idle-icon{
+  width:44px;height:44px;border-radius:50%;
+  background:var(--gray-100);border:1px solid var(--gray-200);
+  display:flex;align-items:center;justify-content:center;
+  margin:0 auto 12px;color:var(--gray-300);
+}
+.sp-idle-t{font-size:13px;font-weight:600;color:var(--gray-400);margin-bottom:3px}
+.sp-idle-s{font-size:11px;color:var(--gray-300)}
+
+.sp-band{
+  padding:12px 18px;display:flex;align-items:center;justify-content:space-between;
+}
+.sp-band-label{font-size:10px;font-weight:800;letter-spacing:0.7px;text-transform:uppercase;color:#fff}
+.sp-band-right{display:flex;align-items:center;gap:5px}
+.sp-pulse{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.65);animation:pip-pulse 2s ease-in-out infinite}
+.sp-band-status{font-size:10px;font-weight:600;color:rgba(255,255,255,0.8)}
+.band-navy{background:linear-gradient(135deg,var(--navy-800),var(--navy-600))}
+.band-green{background:linear-gradient(135deg,#166534,var(--green-500))}
+.band-amber{background:linear-gradient(135deg,#92400e,var(--amber-500))}
+.band-red{background:linear-gradient(135deg,#7f1d1d,var(--red-500))}
+
+.sp-body{padding:16px 18px}
+.sp-slot{font-size:16px;font-weight:800;color:var(--gray-900);letter-spacing:-0.4px;margin-bottom:2px}
+.sp-clin{font-size:11px;color:var(--gray-400);margin-bottom:12px}
+.sp-divider{height:1px;background:var(--gray-100);margin:10px 0}
+
+.sp-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sp-stat{background:var(--gray-50);border:1px solid var(--gray-100);border-radius:8px;padding:10px 12px}
+.sp-stat-l{font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--gray-400);margin-bottom:3px}
+.sp-stat-v{font-size:20px;font-weight:800;letter-spacing:-0.5px;line-height:1}
+.sv-blue{color:var(--navy-500)}
+.sv-amber{color:var(--amber-500)}
+.sv-red{color:var(--red-500)}
+.sv-green{color:var(--green-700)}
+
+.sp-status-row{display:flex;align-items:center;gap:6px;margin-top:12px}
+.sp-dot{width:6px;height:6px;border-radius:50%;background:var(--teal-500);animation:pip-pulse 2s ease-in-out infinite}
+.sp-dot-txt{font-size:11px;color:var(--gray-400)}
+
+.confirm-wrap{text-align:center;padding:8px 0 14px}
+.confirm-check{
+  width:48px;height:48px;border-radius:50%;
+  background:var(--green-100);border:2px solid #bbf7d0;
+  display:flex;align-items:center;justify-content:center;
+  margin:0 auto 12px;color:var(--green-700);
+}
+.confirm-t{font-size:14px;font-weight:800;color:var(--gray-900);margin-bottom:3px}
+.confirm-s{font-size:11px;color:var(--gray-400);margin-bottom:14px}
+.by-card{
+  background:var(--gray-50);border:1px solid var(--gray-200);
+  border-radius:8px;padding:10px 12px;text-align:left;
+}
+.by-l{font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--gray-400);margin-bottom:3px}
+.by-e{font-size:12px;font-weight:700;color:var(--gray-800);word-break:break-all;margin-bottom:2px}
+.by-t{font-size:10px;color:var(--gray-400)}
+
+/* ═══════════════════════════════════════
+   ROSTER TABLE PANEL
+═══════════════════════════════════════ */
+.roster-panel{
+  background:var(--white);border-radius:12px;
+  border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);overflow:hidden;
+  display:none;
+}
+.roster-panel.show{display:block}
+.roster-head{
+  padding:12px 18px;border-bottom:1px solid var(--gray-100);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.roster-title{font-size:12px;font-weight:700;color:var(--gray-800)}
+.roster-sub{font-size:10px;color:var(--gray-400)}
+.roster-tbl{width:100%;border-collapse:collapse}
+.roster-tbl th{
+  padding:8px 18px;font-size:9px;font-weight:700;
+  letter-spacing:0.5px;text-transform:uppercase;
+  color:var(--gray-400);background:var(--gray-50);
+  border-bottom:1px solid var(--gray-100);text-align:left;
+}
+.roster-tbl td{
+  padding:9px 18px;font-size:11px;vertical-align:middle;
+  border-bottom:1px solid var(--gray-50);
+}
+.roster-tbl tr:last-child td{border-bottom:none}
+.roster-tbl tr:hover td{background:var(--gray-50)}
+.r-avatar{
+  width:24px;height:24px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:9px;font-weight:700;color:#fff;flex-shrink:0;
+}
+.r-email-cell{display:flex;align-items:center;gap:8px}
+.r-email-txt{font-weight:500;color:var(--gray-700);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip{display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;border-radius:4px;padding:2px 7px;border:1px solid transparent}
+.c-pending{background:var(--gray-100);color:var(--gray-500);border-color:var(--gray-200)}
+.c-accepted{background:var(--green-100);color:var(--green-700);border-color:#bbf7d0}
+.c-declined{background:var(--amber-100);color:var(--amber-700);border-color:#fde68a}
+.c-expired{background:var(--red-100);color:var(--red-700);border-color:#fecaca}
+
+/* ═══════════════════════════════════════
+   ACTIVITY LOG
+═══════════════════════════════════════ */
+.log-panel{
+  background:#0d1b3e;border-radius:12px;
+  border:1px solid rgba(255,255,255,0.05);
+  box-shadow:var(--shadow-lg);overflow:hidden;
+}
+.log-head{
+  padding:12px 18px;border-bottom:1px solid rgba(255,255,255,0.05);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.log-title{font-size:12px;font-weight:700;color:#e2e8f0}
+.log-sub{font-size:10px;color:rgba(255,255,255,0.25);margin-top:1px}
+.log-clear{
+  background:none;border:1px solid rgba(255,255,255,0.1);
+  border-radius:4px;padding:2px 8px;
+  font-size:10px;color:rgba(255,255,255,0.3);
+  cursor:pointer;font-family:'Inter',sans-serif;transition:all 150ms;
+}
+.log-clear:hover{border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.6)}
+.log-scroll{max-height:200px;overflow-y:auto;padding:4px 0}
+.log-scroll::-webkit-scrollbar{width:3px}
+.log-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}
+.log-entry{display:flex;align-items:flex-start;gap:7px;padding:5px 18px;animation:log-in 180ms ease}
+@keyframes log-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.lb{flex-shrink:0;font-size:8px;font-weight:700;letter-spacing:0.5px;border-radius:3px;padding:2px 5px;margin-top:1px;font-family:monospace;min-width:42px;text-align:center}
+.lb-send{background:#1e3a5f;color:#60a5fa}
+.lb-accept{background:#14532d;color:#4ade80}
+.lb-decline{background:#451a03;color:#fbbf24}
+.lb-expire{background:#450a0a;color:#f87171}
+.lb-error{border:1px solid rgba(239,68,68,0.4);color:#f87171}
+.lb-info{background:#1e293b;color:#64748b}
+.log-msg{font-size:10px;color:rgba(255,255,255,0.6);font-family:monospace;flex:1;line-height:1.5;word-break:break-all}
+.log-time{font-size:9px;color:rgba(255,255,255,0.2);font-family:monospace;flex-shrink:0;margin-top:2px}
+.log-empty{padding:18px;font-size:10px;color:rgba(255,255,255,0.15);font-family:monospace;text-align:center}
+
+/* ═══════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════ */
+@media(max-width:1100px){
+  .metrics-row{grid-template-columns:repeat(3,1fr)}
+  .lower-grid{grid-template-columns:1fr}
+  .right-col{position:static}
+}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%)}
+  .main{margin-left:0}
+  .metrics-row{grid-template-columns:repeat(2,1fr)}
+  .input-row{grid-template-columns:1fr}
+  .page-content{padding:16px}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════
+     SIDEBAR
+═══════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <div class="brand-name">SwiftSlot</div>
+      <div class="brand-sub">Clinical Recovery Suite</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-group-label">Main</div>
+    <button class="nav-item active">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+    <button class="nav-item" onclick="addLog('INFO','Waitlist module — coming soon')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Waitlist
+      <span class="nav-badge" id="waitlistBadge">0</span>
+    </button>
+
+    <div class="nav-group-label">Recovery</div>
+    <button class="nav-item" onclick="addLog('INFO','Broadcast history — coming soon')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      Broadcasts
+    </button>
+    <button class="nav-item" onclick="addLog('INFO','Slot calendar — coming soon')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Appointments
+    </button>
+    <button class="nav-item" onclick="addLog('INFO','Analytics — coming soon')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Analytics
+    </button>
+
+    <div class="nav-group-label">Config</div>
+    <button class="nav-item" onclick="addLog('INFO','Settings — coming soon')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg>
+      Settings
+    </button>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="user-avatar" id="userAvatar">R</div>
+      <div class="user-info">
+        <div class="user-name" id="userName">Receptionist</div>
+        <div class="user-role">Sidecar Pilot</div>
+      </div>
+      <div class="conn-pip" id="sidebarPip"></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══════════════════════════════
+     MAIN
+═══════════════════════════════ -->
+<div class="main">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div>
+      <div class="topbar-title">Recovery Dashboard</div>
+      <div class="topbar-sub" id="topbarDate">Loading...</div>
+    </div>
+    <div class="topbar-center">
+      <div class="practice-badge">
+        <svg class="practice-badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <input class="practice-name-input" id="practiceInput" type="text" placeholder="Enter practice name..." autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="topbar-conn">
+        <div class="topbar-conn-dot" id="topConnDot"></div>
+        <span id="topConnLabel">Connected</span>
+      </div>
+      <div class="topbar-clock" id="clockEl">00:00:00</div>
+    </div>
+  </header>
+
+  <!-- PAGE -->
+  <div class="page-content">
+
+    <!-- DEGRADED BANNER -->
+    <div class="deg-banner" id="degBanner">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span id="degMsg">Database connection degraded.</span>
+      <button class="deg-banner-close" onclick="document.getElementById('degBanner').classList.remove('show')">×</button>
+    </div>
+
+    <!-- PAGE HEADER -->
+    <div class="page-header">
+      <div class="page-header-title">Slot Recovery Centre</div>
+      <div class="page-header-sub" id="pageHeaderSub">Broadcast cancelled appointments to your consented short-notice waitlist</div>
+    </div>
+
+    <!-- METRIC CARDS -->
+    <div class="metrics-row">
+      <div class="metric-card">
+        <div class="metric-top">
+          <div class="metric-icon-wrap blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </div>
+          <span class="metric-dots">⋯</span>
+        </div>
+        <div class="metric-value" id="metricBroadcasts">0</div>
+        <div class="metric-label">Broadcasts Today</div>
+        <div class="metric-delta delta-neutral" id="deltaBroadcasts">Session</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-top">
+          <div class="metric-icon-wrap green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <span class="metric-dots">⋯</span>
+        </div>
+        <div class="metric-value" id="metricFilled">0</div>
+        <div class="metric-label">Slots Recovered</div>
+        <div class="metric-delta delta-neutral" id="deltaFilled">—</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-top">
+          <div class="metric-icon-wrap teal">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+          </div>
+          <span class="metric-dots">⋯</span>
+        </div>
+        <div class="metric-value" id="metricOffers">0</div>
+        <div class="metric-label">Offers Sent</div>
+        <div class="metric-delta delta-neutral">Total session</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-top">
+          <div class="metric-icon-wrap amber">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <span class="metric-dots">⋯</span>
+        </div>
+        <div class="metric-value" id="metricExpired">0</div>
+        <div class="metric-label">Expired / Declined</div>
+        <div class="metric-delta delta-neutral">Total session</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-top">
+          <div class="metric-icon-wrap purple">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <span class="metric-dots">⋯</span>
+        </div>
+        <div class="metric-value" id="metricRate">—</div>
+        <div class="metric-label">Recovery Rate</div>
+        <div class="metric-delta delta-neutral" id="deltaRate">This session</div>
+      </div>
+    </div>
+
+    <!-- LOWER GRID -->
+    <div class="lower-grid">
+
+      <!-- BROADCAST FORM PANEL -->
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-head-left">
+            <div class="panel-head-icon teal">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </div>
+            <div>
+              <div class="panel-head-title">Broadcast Open Slot</div>
+              <div class="panel-head-sub">Notify your consented short-notice waitlist</div>
+            </div>
+          </div>
+          <span class="panel-head-badge badge-idle" id="broadcastBadge">IDLE</span>
+        </div>
+
+        <!-- STEP 1 -->
+        <div class="step-block">
+          <div class="step-hdr">
+            <div class="step-circle">1</div>
+            <div>
+              <div class="step-name">Appointment Details</div>
+              <div class="step-desc">Enter the cancelled slot you want to recover</div>
+            </div>
+          </div>
+          <div class="input-row">
+            <div>
+              <label class="field-label" for="slotTime">Slot Date &amp; Time</label>
+              <input class="f-input" type="datetime-local" id="slotTime">
+              <div class="f-hint">Displayed to patients in the offer email</div>
+            </div>
+            <div>
+              <label class="field-label" for="clinician">Clinician</label>
+              <input class="f-input" type="text" id="clinician" placeholder="e.g. Dr. Smith" autocomplete="off">
+              <div class="f-hint">Included in the patient notification</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2 -->
+        <div class="step-block">
+          <div class="step-hdr">
+            <div class="step-circle">2</div>
+            <div>
+              <div class="step-name">Waitlist Recipients</div>
+              <div class="step-desc">Press Enter or comma to add each email address</div>
+            </div>
+          </div>
+          <div class="recip-row">
+            <span class="r-label">Patient Email Addresses</span>
+            <div class="r-meta">
+              <span class="r-count" id="rCount">0 / 10</span>
+              <button class="r-clear hidden" id="rClearBtn">Clear all</button>
+            </div>
+          </div>
+          <div class="tag-area" id="tagArea">
+            <input class="tag-real" id="tagInput" type="text" placeholder="patient@example.com" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+          <div class="r-hint">Invalid addresses rejected automatically · Max 10 patients per broadcast</div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div class="step-block">
+          <div class="step-hdr">
+            <div class="step-circle">3</div>
+            <div>
+              <div class="step-name">Broadcast Action</div>
+              <div class="step-desc">Send a 4-hour time-limited offer to all listed patients</div>
+            </div>
+          </div>
+
+          <div class="lock-bar" id="lockBar">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            Broadcast active — form locked until slot is resolved
+          </div>
+
+          <div class="gdpr">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div class="gdpr-txt"><strong>UK GDPR Notice:</strong> Only contact patients with explicit prior consent. Do not reference clinical diagnosis, treatment history, or procedure type.</div>
+          </div>
+
+          <button class="btn-primary" id="broadcastBtn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" id="btnIcon"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <span id="btnLabel">Send Offers to Waitlist</span>
+          </button>
+          <button class="btn-ghost" id="resetBtn">Reset Form</button>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="right-col">
+
+        <!-- STATUS PANEL -->
+        <div class="status-panel">
+          <div class="sp-head">
+            <div>
+              <div class="sp-head-label">Live Slot Status</div>
+              <div class="sp-head-sub">Real-time broadcast monitor</div>
+            </div>
+            <span class="panel-head-badge badge-idle" id="statusBadge">IDLE</span>
+          </div>
+          <div id="statusBody"></div>
+        </div>
+
+        <!-- ROSTER -->
+        <div class="roster-panel" id="rosterPanel">
+          <div class="roster-head">
+            <span class="roster-title">Offer Roster</span>
+            <span class="roster-sub">Patient response tracking</span>
+          </div>
+          <table class="roster-tbl">
+            <thead>
+              <tr>
+                <th>Patient</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="rosterBody"></tbody>
+          </table>
+        </div>
+
+        <!-- ACTIVITY LOG -->
+        <div class="log-panel">
+          <div class="log-head">
+            <div>
+              <div class="log-title">Activity Log</div>
+              <div class="log-sub">Operational event stream</div>
+            </div>
+            <button class="log-clear" id="logClearBtn">Clear</button>
+          </div>
+          <div class="log-scroll" id="logScroll">
+            <div class="log-empty" id="logEmpty">Awaiting events...</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ─── CONFIG ─────────────────────────────── */
+var API      = window.location.origin;
+var POLL_MS  = 8000;
+var MAX_TAGS = 10;
+var MAX_LOG  = 20;
+var OFFER_MS = 4 * 60 * 60 * 1000;
+
+/* ─── STATE ──────────────────────────────── */
+var S = {
+  broadcast: null,
+  roster: {},
+  pollTimer: null,
+  cdTimer: null,
+  tags: [],
+  connected: true,
+  logCount: 0,
+  lastLogKey: '',
+  stats: { broadcasts:0, filled:0, offers:0, expired:0 }
+};
+
+/* ─── UTILITIES ──────────────────────────── */
+function pad2(n){ return ('0'+n).slice(-2); }
+function nowTime(){
+  var d=new Date();
+  return pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+}
+function esc(s){
+  if(!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtSlot(dt){
+  var d = dt instanceof Date ? dt : new Date(dt);
+  return d.toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function fmtLocked(iso){
+  return new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function isEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
+
+/* ─── CLOCK & DATE ───────────────────────── */
+function tick(){
+  var d=new Date();
+  document.getElementById('clockEl').textContent=pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+}
+setInterval(tick,1000); tick();
+
+(function setDate(){
+  var d=new Date();
+  var opts={weekday:'long',day:'numeric',month:'long',year:'numeric'};
+  document.getElementById('topbarDate').textContent=d.toLocaleDateString('en-GB',opts);
+})();
+
+/* ─── PRACTICE NAME ──────────────────────── */
+var pi=document.getElementById('practiceInput');
+pi.value=localStorage.getItem('ss_prac')||'';
+pi.addEventListener('input',function(){
+  localStorage.setItem('ss_prac',this.value);
+  var initials=(this.value||'R').trim().charAt(0).toUpperCase();
+  document.getElementById('userAvatar').textContent=initials;
+  document.getElementById('userName').textContent=this.value||'Receptionist';
+});
+// Init avatar
+(function(){
+  var v=pi.value||'';
+  document.getElementById('userAvatar').textContent=v?v.trim().charAt(0).toUpperCase():'R';
+  document.getElementById('userName').textContent=v||'Receptionist';
+})();
+
+/* ─── PREFILL SLOT TIME ──────────────────── */
+function prefillSlot(){
+  var d=new Date(); d.setMinutes(0,0,0); d.setHours(d.getHours()+1);
+  document.getElementById('slotTime').value=
+    d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+
+    'T'+pad2(d.getHours())+':00';
+}
+prefillSlot();
+
+/* ─── CONNECTION STATE ───────────────────── */
+function setConn(ok){
+  S.connected=ok;
+  var dot1=document.getElementById('topConnDot');
+  var lbl1=document.getElementById('topConnLabel');
+  var pip=document.getElementById('sidebarPip');
+  if(ok){
+    dot1.className='topbar-conn-dot';
+    lbl1.textContent='Connected';
+    pip.className='conn-pip';
+  } else {
+    dot1.className='topbar-conn-dot warn';
+    lbl1.textContent='Reconnecting...';
+    pip.className='conn-pip warn';
+  }
+}
+
+/* ─── METRICS ────────────────────────────── */
+function updateMetrics(){
+  document.getElementById('metricBroadcasts').textContent=S.stats.broadcasts;
+  document.getElementById('metricFilled').textContent=S.stats.filled;
+  document.getElementById('metricOffers').textContent=S.stats.offers;
+  document.getElementById('metricExpired').textContent=S.stats.expired;
+  var total=S.stats.broadcasts;
+  var rate=total>0?Math.round((S.stats.filled/total)*100)+'%':'—';
+  document.getElementById('metricRate').textContent=rate;
+  // Delta colours
+  var deltaF=document.getElementById('deltaFilled');
+  if(S.stats.filled>0){
+    deltaF.className='metric-delta delta-up';
+    deltaF.textContent='+'+S.stats.filled+' recovered';
+  }
+  // Waitlist badge
+  document.getElementById('waitlistBadge').textContent=S.tags.length;
+}
+
+/* ─── ACTIVITY LOG ───────────────────────── */
+var logTypes={SEND:'lb-send',ACCEPT:'lb-accept',DECLINE:'lb-decline',EXPIRE:'lb-expire',ERROR:'lb-error',INFO:'lb-info'};
+
+function addLog(type,msg){
+  var key=type+'|'+msg;
+  if(key===S.lastLogKey) return;
+  S.lastLogKey=key;
+  var self=key;
+  setTimeout(function(){ if(S.lastLogKey===self) S.lastLogKey=''; },1500);
+
+  var scroll=document.getElementById('logScroll');
+  var empty=document.getElementById('logEmpty');
+  if(empty){ empty.parentNode.removeChild(empty); }
+
+  var row=document.createElement('div');
+  row.className='log-entry';
+
+  var badge=document.createElement('span');
+  badge.className='lb '+(logTypes[type]||'lb-info');
+  badge.textContent=type;
+
+  var msgEl=document.createElement('span');
+  msgEl.className='log-msg';
+  msgEl.textContent=msg;
+
+  var timeEl=document.createElement('span');
+  timeEl.className='log-time';
+  timeEl.textContent=nowTime();
+
+  row.appendChild(badge); row.appendChild(msgEl); row.appendChild(timeEl);
+  scroll.insertBefore(row,scroll.firstChild);
+
+  S.logCount++;
+  if(S.logCount>MAX_LOG){
+    var last=scroll.lastElementChild;
+    if(last){ scroll.removeChild(last); S.logCount--; }
+  }
+}
+
+document.getElementById('logClearBtn').addEventListener('click',function(){
+  var scroll=document.getElementById('logScroll');
+  scroll.innerHTML='<div class="log-empty" id="logEmpty">Awaiting events...</div>';
+  S.logCount=0; S.lastLogKey='';
+});
+
+/* ─── BROADCAST BADGE ────────────────────── */
+function setBadge(el,mode){
+  var map={
+    idle:   {cls:'badge-idle',  txt:'IDLE'},
+    live:   {cls:'badge-live',  txt:'LIVE'},
+    locked: {cls:'badge-locked',txt:'FILLED'},
+    declined:{cls:'badge-declined',txt:'DECLINED'},
+    expired:{cls:'badge-expired',txt:'EXPIRED'}
+  };
+  var b=map[mode]||map.idle;
+  el.className='panel-head-badge '+b.cls;
+  el.textContent=b.txt;
+}
+
+/* ─── STATUS PANEL ───────────────────────── */
+function renderIdle(){
+  setBadge(document.getElementById('broadcastBadge'),'idle');
+  setBadge(document.getElementById('statusBadge'),'idle');
+  document.getElementById('statusBody').innerHTML=
+    '<div class="sp-idle">'+
+      '<div class="sp-idle-icon">'+
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+
+          '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'+
+        '</svg>'+
+      '</div>'+
+      '<div class="sp-idle-t">No Active Broadcast</div>'+
+      '<div class="sp-idle-s">System monitoring for clinic availability gaps.</div>'+
+    '</div>';
+}
+
+function renderBroadcasting(){
+  if(!S.broadcast) return;
+  var ft=fmtSlot(S.broadcast.slotTime);
+  var cl=S.broadcast.clinician?esc(S.broadcast.clinician):'<span style="color:var(--gray-300)">No clinician</span>';
+  setBadge(document.getElementById('broadcastBadge'),'live');
+  setBadge(document.getElementById('statusBadge'),'live');
+  document.getElementById('statusBody').innerHTML=
+    '<div class="sp-band band-navy">'+
+      '<span class="sp-band-label">Live Broadcast</span>'+
+      '<div class="sp-band-right"><span class="sp-pulse"></span><span class="sp-band-status">Broadcasting</span></div>'+
+    '</div>'+
+    '<div class="sp-body">'+
+      '<div class="sp-slot">'+esc(ft)+'</div>'+
+      '<div class="sp-clin">'+cl+'</div>'+
+      '<div class="sp-divider"></div>'+
+      '<div class="sp-stats">'+
+        '<div class="sp-stat"><div class="sp-stat-l">Offers Sent</div><div class="sp-stat-v sv-blue" id="spOffers">'+S.broadcast.emails.length+'</div></div>'+
+        '<div class="sp-stat"><div class="sp-stat-l">Expires In</div><div class="sp-stat-v sv-amber" id="spCd">4:00:00</div></div>'+
+      '</div>'+
+      '<div class="sp-status-row"><div class="sp-dot"></div><span class="sp-dot-txt">Awaiting first patient confirmation</span></div>'+
+    '</div>';
+  startCd();
+}
+
+function renderLocked(data){
+  if(!S.broadcast) return;
+  var ft=fmtSlot(S.broadcast.slotTime);
+  var cl=S.broadcast.clinician?' · '+esc(S.broadcast.clinician):'';
+  var by=data&&data.accepted_by?esc(data.accepted_by):'—';
+  var lt=data&&data.locked_at?'<div class="by-t">'+esc(fmtLocked(data.locked_at))+'</div>':'';
+  setBadge(document.getElementById('broadcastBadge'),'locked');
+  setBadge(document.getElementById('statusBadge'),'locked');
+  document.getElementById('statusBody').innerHTML=
+    '<div class="sp-band band-green">'+
+      '<span class="sp-band-label">Slot Recovered</span>'+
+      '<div class="sp-band-right">'+
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'+
+        '<span class="sp-band-status">Confirmed</span>'+
+      '</div>'+
+    '</div>'+
+    '<div class="sp-body">'+
+      '<div class="confirm-wrap">'+
+        '<div class="confirm-check">'+
+          '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'+
+        '</div>'+
+        '<div class="confirm-t">Appointment Confirmed</div>'+
+        '<div class="confirm-s">'+esc(ft)+cl+'</div>'+
+        '<div class="by-card">'+
+          '<div class="by-l">Confirmed By</div>'+
+          '<div class="by-e">'+by+'</div>'+
+          lt+
+        '</div>'+
+        '<button class="btn-act navy" id="newBtn" style="margin-top:14px">'+
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'+
+          'Start New Broadcast'+
+        '</button>'+
+      '</div>'+
+    '</div>';
+  document.getElementById('newBtn').addEventListener('click',doReset);
+}
+
+function renderDeclined(){
+  if(!S.broadcast) return;
+  var ft=fmtSlot(S.broadcast.slotTime);
+  setBadge(document.getElementById('broadcastBadge'),'declined');
+  setBadge(document.getElementById('statusBadge'),'declined');
+  document.getElementById('statusBody').innerHTML=
+    '<div class="sp-band band-amber"><span class="sp-band-label">All Patients Declined</span></div>'+
+    '<div class="sp-body">'+
+      '<div class="confirm-wrap">'+
+        '<div style="font-size:28px;margin-bottom:10px">😔</div>'+
+        '<div class="confirm-t">All Patients Declined</div>'+
+        '<div class="confirm-s">'+esc(ft)+'</div>'+
+        '<p style="font-size:11px;color:var(--gray-400);line-height:1.6;margin:10px 0">Every patient declined this offer. Rebroadcast with a new list or start fresh.</p>'+
+        '<button class="btn-act navy" id="rebrBtn">Rebroadcast with New List</button>'+
+        '<button class="btn-act outline" id="freshBtn">Start Fresh</button>'+
+      '</div>'+
+    '</div>';
+  document.getElementById('rebrBtn').addEventListener('click',doRebroadcast);
+  document.getElementById('freshBtn').addEventListener('click',doReset);
+}
+
+function renderExpired(){
+  if(!S.broadcast) return;
+  var ft=fmtSlot(S.broadcast.slotTime);
+  setBadge(document.getElementById('broadcastBadge'),'expired');
+  setBadge(document.getElementById('statusBadge'),'expired');
+  document.getElementById('statusBody').innerHTML=
+    '<div class="sp-band band-red"><span class="sp-band-label">Offer Window Expired</span></div>'+
+    '<div class="sp-body">'+
+      '<div class="confirm-wrap">'+
+        '<div style="font-size:28px;margin-bottom:10px">⏰</div>'+
+        '<div class="confirm-t">Offer Window Expired</div>'+
+        '<div class="confirm-s">'+esc(ft)+'</div>'+
+        '<p style="font-size:11px;color:var(--gray-400);line-height:1.6;margin:10px 0">No patient confirmed within the 4-hour window. The slot has been released.</p>'+
+        '<button class="btn-act navy" id="expFreshBtn">Start New Broadcast</button>'+
+      '</div>'+
+    '</div>';
+  document.getElementById('expFreshBtn').addEventListener('click',doReset);
+}
+
+/* ─── COUNTDOWN ──────────────────────────── */
+function startCd(){
+  stopCd();
+  S.cdTimer=setInterval(function(){
+    var el=document.getElementById('spCd');
+    if(!el||!S.broadcast){ stopCd(); return; }
+    var rem=S.broadcast.sentAt.getTime()+OFFER_MS-Date.now();
+    if(rem<=0){ stopCd(); el.textContent='0:00:00'; onExpired(); return; }
+    var h=Math.floor(rem/3600000);
+    var m=Math.floor((rem%3600000)/60000);
+    var s=Math.floor((rem%60000)/1000);
+    el.textContent=h+':'+pad2(m)+':'+pad2(s);
+    if(rem<600000)       el.className='sp-stat-v sv-red';
+    else if(rem<1800000) el.className='sp-stat-v sv-amber';
+    else                 el.className='sp-stat-v sv-blue';
+  },1000);
+}
+function stopCd(){ if(S.cdTimer){clearInterval(S.cdTimer);S.cdTimer=null;} }
+
+/* ─── ROSTER ─────────────────────────────── */
+var avatarColors=['#2563eb','#0d9488','#7c3aed','#db2777','#d97706','#059669'];
+function avatarColor(email){ var n=0;for(var i=0;i<email.length;i++)n+=email.charCodeAt(i);return avatarColors[n%avatarColors.length]; }
+function avatarInitial(email){ return email.charAt(0).toUpperCase(); }
+
+function initRoster(emails){
+  S.roster={};
+  for(var i=0;i<emails.length;i++) S.roster[emails[i]]='pending';
+  renderRoster();
+  document.getElementById('rosterPanel').classList.add('show');
+}
+
+function renderRoster(){
+  var tb=document.getElementById('rosterBody');
+  tb.innerHTML='';
+  var emails=Object.keys(S.roster);
+  for(var i=0;i<emails.length;i++){
+    var email=emails[i];
+    var status=S.roster[email];
+    var chipMap={pending:'chip c-pending',accepted:'chip c-accepted',declined:'chip c-declined',expired:'chip c-expired'};
+    var chipCls=chipMap[status]||'chip c-pending';
+    var chipTxt=status.charAt(0).toUpperCase()+status.slice(1);
+    var tr=document.createElement('tr');
+
+    var td1=document.createElement('td');
+    var wrap=document.createElement('div');
+    wrap.className='r-email-cell';
+    var av=document.createElement('div');
+    av.className='r-avatar';
+    av.style.background=avatarColor(email);
+    av.textContent=avatarInitial(email);
+    var etxt=document.createElement('span');
+    etxt.className='r-email-txt';
+    etxt.title=email;
+    etxt.textContent=email;
+    wrap.appendChild(av); wrap.appendChild(etxt);
+    td1.appendChild(wrap);
+
+    var td2=document.createElement('td');
+    var chip=document.createElement('span');
+    chip.className=chipCls;
+    chip.textContent=chipTxt;
+    td2.appendChild(chip);
+
+    tr.appendChild(td1); tr.appendChild(td2);
+    tb.appendChild(tr);
+  }
+}
+
+function setRoster(email,status){
+  if(Object.prototype.hasOwnProperty.call(S.roster,email)){
+    S.roster[email]=status; renderRoster();
+  }
+}
+function expireAll(){
+  var emails=Object.keys(S.roster);
+  for(var i=0;i<emails.length;i++){
+    if(S.roster[emails[i]]==='pending') S.roster[emails[i]]='expired';
+  }
+  renderRoster();
+}
+
+/* ─── POLLING ────────────────────────────── */
+function startPoll(id){
+  stopPoll();
+  S.pollTimer=setInterval(function(){ doPoll(id); },POLL_MS);
+}
+function stopPoll(){ if(S.pollTimer){clearInterval(S.pollTimer);S.pollTimer=null;} }
+
+function doPoll(id){
+  fetch(API+'/slot-status/'+id)
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      setConn(true);
+      if(data.status==='locked'){
+        stopPoll(); stopCd();
+        S.stats.filled++; updateMetrics();
+        if(data.accepted_by){
+          setRoster(data.accepted_by,'accepted');
+          expireAll();
+          S.roster[data.accepted_by]='accepted';
+          renderRoster();
+        }
+        renderLocked(data);
+        addLog('ACCEPT','Slot confirmed by '+(data.accepted_by||'patient'));
+        unlockForm();
+      } else if(data.status==='all_declined'){
+        stopPoll(); stopCd();
+        S.stats.expired++; updateMetrics();
+        expireAll();
+        renderDeclined();
+        addLog('DECLINE','All patients declined');
+        unlockForm();
+      } else if(data.status==='expired'){
+        stopPoll(); stopCd();
+        S.stats.expired++; updateMetrics();
+        expireAll();
+        renderExpired();
+        addLog('EXPIRE','Offer window expired');
+        unlockForm();
+      }
+    })
+    .catch(function(err){
+      setConn(false);
+      addLog('ERROR','Poll: '+err.message);
+    });
+}
+
+function onExpired(){
+  stopPoll(); S.stats.expired++; updateMetrics();
+  expireAll(); renderExpired();
+  addLog('EXPIRE','Offer window closed');
+  unlockForm();
+}
+
+/* ─── TAG INPUT ──────────────────────────── */
+function renderTags(){
+  var area=document.getElementById('tagArea');
+  var inp=document.getElementById('tagInput');
+  var existing=area.querySelectorAll('.e-tag');
+  for(var i=0;i<existing.length;i++) area.removeChild(existing[i]);
+  for(var j=0;j<S.tags.length;j++){
+    (function(email){
+      var tag=document.createElement('span');
+      tag.className='e-tag';
+      var txt=document.createElement('span');
+      txt.textContent=email;
+      var btn=document.createElement('button');
+      btn.type='button'; btn.className='e-tag-x'; btn.textContent='×';
+      btn.setAttribute('aria-label','Remove '+email);
+      btn.addEventListener('click',function(e){ e.stopPropagation(); removeTag(email); });
+      tag.appendChild(txt); tag.appendChild(btn);
+      area.insertBefore(tag,inp);
+    })(S.tags[j]);
+  }
+  updateTagUI();
+}
+
+function updateTagUI(){
+  var c=document.getElementById('rCount');
+  var n=S.tags.length;
+  c.textContent=n+' / '+MAX_TAGS;
+  c.className='r-count'+(n>MAX_TAGS?' over':'');
+  var cl=document.getElementById('rClearBtn');
+  cl.className='r-clear'+(n>0?'':' hidden');
+  document.getElementById('waitlistBadge').textContent=n;
+  updateResetBtn();
+}
+
+function addTag(raw){
+  var email=raw.trim().toLowerCase().replace(/,+$/,'');
+  if(!email) return;
+  if(!isEmail(email)){ shakeInput(); return; }
+  for(var i=0;i<S.tags.length;i++){ if(S.tags[i]===email) return; }
+  if(S.tags.length>=MAX_TAGS){ addLog('ERROR','Max '+MAX_TAGS+' recipients'); return; }
+  S.tags.push(email);
+  renderTags();
+}
+
+function removeTag(email){
+  S.tags=S.tags.filter(function(t){ return t!==email; });
+  renderTags();
+}
+
+function shakeInput(){
+  var inp=document.getElementById('tagInput');
+  inp.style.color='var(--red-500)';
+  var pos=0;
+  var id=setInterval(function(){
+    pos++;
+    inp.style.transform='translateX('+(pos%2===0?5:-5)+'px)';
+    if(pos>=6){ clearInterval(id); inp.style.transform=''; inp.style.color=''; }
+  },50);
+}
+
+document.getElementById('rClearBtn').addEventListener('click',function(){ S.tags=[]; renderTags(); });
+document.getElementById('tagArea').addEventListener('click',function(){ document.getElementById('tagInput').focus(); });
+
+var ti=document.getElementById('tagInput');
+ti.addEventListener('keydown',function(e){
+  if(e.key==='Enter'||e.key===','){
+    e.preventDefault();
+    var v=this.value.trim();
+    if(v){ addTag(v); this.value=''; }
+  } else if(e.key==='Backspace'&&this.value===''&&S.tags.length>0){
+    removeTag(S.tags[S.tags.length-1]);
+  }
+});
+ti.addEventListener('blur',function(){
+  var v=this.value.trim();
+  if(v){ addTag(v); this.value=''; }
+});
+ti.addEventListener('paste',function(e){
+  e.preventDefault();
+  var txt=(e.clipboardData||window.clipboardData).getData('text');
+  var parts=txt.split(/[\n,]+/);
+  for(var i=0;i<parts.length;i++){ var p=parts[i].trim(); if(p) addTag(p); }
+  this.value='';
+});
+
+document.getElementById('slotTime').addEventListener('change',updateResetBtn);
+document.getElementById('clinician').addEventListener('input',updateResetBtn);
+
+function updateResetBtn(){
+  var has=S.tags.length>0||document.getElementById('slotTime').value||document.getElementById('clinician').value;
+  var btn=document.getElementById('resetBtn');
+  btn.className='btn-ghost'+(has&&!S.broadcast?' show':'');
+}
+
+/* ─── FORM LOCK / UNLOCK ─────────────────── */
+function lockForm(){
+  document.getElementById('slotTime').disabled=true;
+  document.getElementById('clinician').disabled=true;
+  document.getElementById('tagInput').disabled=true;
+  document.getElementById('tagArea').classList.add('locked');
+  var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
+  for(var i=0;i<xs.length;i++) xs[i].disabled=true;
+  document.getElementById('lockBar').classList.add('show');
+  document.getElementById('resetBtn').className='btn-ghost';
+}
+
+function unlockForm(){
+  document.getElementById('slotTime').disabled=false;
+  document.getElementById('clinician').disabled=false;
+  document.getElementById('tagInput').disabled=false;
+  document.getElementById('tagArea').classList.remove('locked');
+  var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
+  for(var i=0;i<xs.length;i++) xs[i].disabled=false;
+  document.getElementById('lockBar').classList.remove('show');
+  var btn=document.getElementById('broadcastBtn');
+  btn.disabled=false; btn.className='btn-primary';
+  document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+  var ic=btn.querySelector('svg');
+  if(ic) ic.style.display='';
+  var sp=btn.querySelector('.spin');
+  if(sp) btn.removeChild(sp);
+}
+
+/* ─── BROADCAST ──────────────────────────── */
+document.getElementById('broadcastBtn').addEventListener('click',function(){
+  var sv=document.getElementById('slotTime').value;
+  var cl=document.getElementById('clinician').value.trim();
+  if(!sv){ addLog('ERROR','Slot date and time is required'); document.getElementById('slotTime').focus(); return; }
+  if(S.tags.length===0){ addLog('ERROR','Add at least one patient email'); ti.focus(); return; }
+  if(S.tags.length>MAX_TAGS){ addLog('ERROR','Max '+MAX_TAGS+' recipients'); return; }
+  var sd=new Date(sv);
+  if(isNaN(sd.getTime())){ addLog('ERROR','Invalid date/time'); return; }
+  if(sd<=new Date()){ addLog('ERROR','Slot time must be in the future'); document.getElementById('slotTime').focus(); return; }
+
+  var btn=this;
+  btn.disabled=true;
+  var ic=btn.querySelector('#btnIcon');
+  if(ic) ic.style.display='none';
+  var sp=document.createElement('span');
+  sp.className='spin'; btn.insertBefore(sp,btn.querySelector('#btnLabel'));
+  document.getElementById('btnLabel').textContent='Sending...';
+
+  fetch(API+'/broadcast',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({slot_time:sd.toISOString(),clinician:cl||null,patient_emails:S.tags.slice()})
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+  .then(function(res){
+    var spp=btn.querySelector('.spin'); if(spp) btn.removeChild(spp);
+    if(!res.ok){
+      btn.disabled=false;
+      var ico=btn.querySelector('#btnIcon'); if(ico) ico.style.display='';
+      document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+      addLog('ERROR',res.data.detail||'Broadcast failed');
+      setConn(false); return;
+    }
+    // Success
+    btn.className='btn-primary success';
+    var ico2=btn.querySelector('#btnIcon'); if(ico2) ico2.style.display='';
+    document.getElementById('btnLabel').textContent='Offers Sent!';
+    S.broadcast={slotId:res.data.slot_id,slotTime:sd,clinician:cl||null,sentAt:new Date(),emails:S.tags.slice()};
+    S.stats.broadcasts++;
+    S.stats.offers+=res.data.offers_sent;
+    updateMetrics();
+    lockForm();
+    initRoster(S.broadcast.emails);
+    renderBroadcasting();
+    startPoll(res.data.slot_id);
+    addLog('SEND','Sent '+res.data.offers_sent+' offer'+(res.data.offers_sent!==1?'s':'')+' — '+fmtSlot(sd));
+    setConn(true);
+  })
+  .catch(function(err){
+    var spp=btn.querySelector('.spin'); if(spp) btn.removeChild(spp);
+    btn.disabled=false; btn.className='btn-primary';
+    var ico=btn.querySelector('#btnIcon'); if(ico) ico.style.display='';
+    document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+    addLog('ERROR',err.message); setConn(false);
+  });
+});
+
+/* ─── RESET ──────────────────────────────── */
+function doReset(){
+  stopPoll(); stopCd();
+  S.broadcast=null; S.roster={}; S.tags=[];
+  document.getElementById('clinician').value='';
+  prefillSlot(); renderTags(); unlockForm(); renderIdle();
+  document.getElementById('rosterPanel').classList.remove('show');
+  document.getElementById('rosterBody').innerHTML='';
+  updateResetBtn(); updateMetrics();
+}
+
+function doRebroadcast(){
+  stopPoll(); stopCd();
+  S.broadcast=null; S.roster={}; S.tags=[];
+  renderTags(); unlockForm(); renderIdle();
+  document.getElementById('rosterPanel').classList.remove('show');
+  document.getElementById('rosterBody').innerHTML='';
+  ti.focus();
+  addLog('INFO','Form reset — slot details retained');
+  updateResetBtn(); updateMetrics();
+}
+
+document.getElementById('resetBtn').addEventListener('click',doReset);
+
+/* ─── HEALTH CHECK ───────────────────────── */
+function healthCheck(){
+  fetch(API+'/health')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.status==='healthy'||d.status==='ok'){
+        addLog('INFO','System online · database '+d.database);
+        setConn(true);
+      } else {
+        addLog('ERROR','System degraded · '+d.database);
+        document.getElementById('degMsg').textContent='Database degraded: '+d.database+'. Broadcasts may fail.';
+        document.getElementById('degBanner').classList.add('show');
+        setConn(false);
+      }
+    })
+    .catch(function(){
+      addLog('ERROR','Cannot reach backend at '+API);
+      document.getElementById('degMsg').textContent='Cannot reach SwiftSlot backend. Check your network.';
+      document.getElementById('degBanner').classList.add('show');
+      setConn(false);
+    });
+}
+
+/* ─── INIT ───────────────────────────────── */
+renderIdle();
+updateMetrics();
+healthCheck();
+
+})();
+</script>
+</body>
+</html>
