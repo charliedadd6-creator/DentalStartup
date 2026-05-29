@@ -2,7 +2,8 @@ fastapi
 uvicorn
 asyncpg
 resend
-pydantic
+pydantic[email]
 pydantic-settings
 python-dotenv
 jinja2
+
