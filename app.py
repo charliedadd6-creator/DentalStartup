@@ -15,11 +15,13 @@ from typing import Annotated
 
 import asyncpg
 import resend
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from models_auth import UserCreate, UserLogin, generate_uuid
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from security import hash_password, verify_password
 from starlette.middleware.sessions import SessionMiddleware
 
 logger = logging.getLogger("swiftslot")
@@ -756,6 +758,79 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
     )
     log.info(f"Offer {offer_id} declined by {result['patient_email']} — {result['remaining_sent']} offer(s) still pending for slot {result['slot_id']}")
     return HTMLResponse(content=_html_decline_page("success", result["slot_time"], result["clinician"], result["remaining_sent"]), status_code=200)
+
+
+# =========================
+# AUTH ROUTES
+# =========================
+
+@app.post("/signup")
+async def signup(request: Request, clinic_name: str = Form(...), email: str = Form(...), password: str = Form(...)):
+    pool = request.app.state.pool
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            clinic_id = generate_uuid()
+            user_id = generate_uuid()
+
+            # Create clinic
+            await conn.execute(
+                """
+                INSERT INTO clinics (id, name)
+                VALUES ($1, $2)
+                """,
+                clinic_id,
+                clinic_name
+            )
+
+            # Create user
+            await conn.execute(
+                """
+                INSERT INTO users (id, clinic_id, email, hashed_password, is_owner)
+                VALUES ($1, $2, $3, $4, TRUE)
+                """,
+                user_id,
+                clinic_id,
+                email,
+                hash_password(password)
+            )
+
+    request.session["user_id"] = user_id
+    request.session["clinic_id"] = clinic_id
+
+    return JSONResponse({"status": "signup_success"})
+
+
+@app.post("/login")
+async def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    pool = request.app.state.pool
+
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow(
+            """
+            SELECT id, clinic_id, hashed_password
+            FROM users
+            WHERE email = $1
+            """,
+            email
+        )
+
+    if not user:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    if not verify_password(password, user["hashed_password"]):
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    request.session["user_id"] = str(user["id"])
+    request.session["clinic_id"] = str(user["clinic_id"])
+
+    return JSONResponse({"status": "login_success"})
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return JSONResponse({"status": "logged_out"})
 
 
 def _html_decline_page(state: str, slot_time: "datetime | None", clinician: "str | None", remaining: int) -> str:
