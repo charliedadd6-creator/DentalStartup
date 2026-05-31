@@ -2,19 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SwiftSlot — Operational Control for Cancelled Appointments</title>
+<title>SwiftSlot — Operational Control for Dental Cancellations</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{
     font-family:Inter,sans-serif;
-    background:#f4f6fa;
+    background:#f6f8fb;
     color:#0f172a;
-    line-height:1.6;
 }
 .navbar{
     background:#0d1b3e;
-    padding:18px 50px;
+    padding:20px 60px;
     display:flex;
     justify-content:space-between;
     align-items:center;
@@ -26,56 +25,55 @@ body{
 }
 .nav-actions a{
     text-decoration:none;
-    margin-left:22px;
+    margin-left:24px;
     font-size:13px;
     font-weight:600;
 }
 .login-link{color:white}
 .cta{
     background:#2563eb;
-    padding:8px 16px;
+    padding:8px 18px;
     border-radius:8px;
     color:white;
 }
 .hero{
-    padding:140px 40px 100px 40px;
+    padding:140px 60px 120px 60px;
     max-width:900px;
-    margin:auto;
 }
 .hero h1{
-    font-size:46px;
+    font-size:52px;
     font-weight:800;
-    margin-bottom:20px;
+    line-height:1.1;
+    margin-bottom:22px;
 }
 .hero p{
-    font-size:19px;
+    font-size:18px;
     color:#475569;
-    margin-bottom:30px;
+    max-width:620px;
+    margin-bottom:36px;
 }
 .hero-buttons{
     display:flex;
-    gap:16px;
+    gap:18px;
 }
 .btn-primary{
     background:#1e3a8a;
-    padding:16px 32px;
-    border-radius:12px;
+    padding:16px 34px;
+    border-radius:10px;
     color:white;
     text-decoration:none;
     font-weight:700;
+    font-size:15px;
 }
 .btn-secondary{
-    border:2px solid #1e3a8a;
-    padding:14px 30px;
-    border-radius:12px;
     color:#1e3a8a;
+    font-weight:600;
     text-decoration:none;
-    font-weight:700;
+    font-size:14px;
 }
 .section{
-    padding:100px 50px;
+    padding:100px 60px;
     max-width:1000px;
-    margin:auto;
 }
 .section h2{
     font-size:28px;
@@ -85,48 +83,43 @@ body{
 .section p{
     font-size:17px;
     color:#475569;
+    max-width:700px;
 }
-.scenario{
-    background:white;
-    padding:40px;
-    border-radius:16px;
-    margin-top:30px;
-    box-shadow:0 8px 24px rgba(0,0,0,0.05);
-}
-.features{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:40px;
+.process{
     margin-top:50px;
+    display:grid;
+    grid-template-columns:1fr;
+    gap:24px;
 }
-.feature{
+.step{
     background:white;
-    padding:30px;
-    border-radius:16px;
-    box-shadow:0 8px 20px rgba(0,0,0,0.04);
+    padding:32px;
+    border-radius:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.04);
 }
-.feature h3{
-    font-size:18px;
-    font-weight:700;
-    margin-bottom:12px;
+.step strong{
+    display:block;
+    margin-bottom:8px;
+    font-size:16px;
 }
 .closing{
-    padding:120px 40px;
-    text-align:center;
+    padding:120px 60px;
+    border-top:1px solid #e2e8f0;
 }
 .closing h2{
-    font-size:34px;
+    font-size:32px;
     font-weight:800;
-    margin-bottom:20px;
+    margin-bottom:18px;
 }
 .footer{
-    text-align:center;
-    padding:50px 20px;
+    padding:60px;
     font-size:12px;
     color:#94a3b8;
 }
 @media(max-width:900px){
-    .features{grid-template-columns:1fr}
+    .hero{padding:100px 30px}
+    .section{padding:80px 30px}
+    .closing{padding:80px 30px}
 }
 </style>
 </head>
@@ -136,68 +129,57 @@ body{
     <div class="logo">SwiftSlot</div>
     <div class="nav-actions">
         <a href="/login-page" class="login-link">Login</a>
-        <a href="/signup-page" class="cta">Start Free Trial</a>
+        <a href="/signup-page" class="cta">Request access</a>
     </div>
 </div>
 
 <section class="hero">
-    <h1>If Three Patients Cancel Tomorrow, What’s Your Plan?</h1>
+    <h1>Operational control over last‑minute dental cancellations.</h1>
     <p>
-        SwiftSlot gives dental practices operational control over last‑minute cancellations.
-        When an appointment drops out, your waitlist is notified immediately.
-        The first confirmed patient secures the slot.
+        SwiftSlot gives dental practices a structured way to recover
+        cancelled appointments without manual calling or spreadsheet tracking.
     </p>
     <div class="hero-buttons">
-        <a href="/signup-page" class="btn-primary">Start Free Trial</a>
-        <a href="/login-page" class="btn-secondary">Login</a>
+        <a href="/signup-page" class="btn-primary">Book a demo</a>
+        <a href="/login-page" class="btn-secondary">Sign in</a>
     </div>
 </section>
 
 <section class="section">
-    <h2>How It Works in Practice</h2>
+    <h2>How it works inside a practice</h2>
     <p>
-        10:12am — A hygiene appointment cancels.
+        When a patient cancels, SwiftSlot broadcasts the open slot
+        to your consented short‑notice list. The first confirmed response
+        locks the appointment automatically.
     </p>
-    <div class="scenario">
-        <p>
-            10:13am — SwiftSlot sends a secure offer to your consented short‑notice list.<br><br>
-            10:21am — A patient accepts.<br><br>
-            10:21am — The slot is locked automatically.
-        </p>
-    </div>
-</section>
 
-<section class="section">
-    <h2>Designed for Operational Simplicity</h2>
-    <div class="features">
-        <div class="feature">
-            <h3>No manual calling</h3>
-            <p>Remove reception bottlenecks and eliminate reactive call lists.</p>
+    <div class="process">
+        <div class="step">
+            <strong>1 — Cancellation occurs</strong>
+            Reception marks the slot as available.
         </div>
-        <div class="feature">
-            <h3>Automatic slot control</h3>
-            <p>The first confirmed response secures the appointment without double‑booking risk.</p>
+        <div class="step">
+            <strong>2 — Immediate broadcast</strong>
+            SwiftSlot notifies your waitlist instantly.
         </div>
-        <div class="feature">
-            <h3>Clear recovery metrics</h3>
-            <p>See recovery rates and performance across clinicians and time periods.</p>
-        </div>
-        <div class="feature">
-            <h3>GDPR compliant by design</h3>
-            <p>Only contact patients with prior consent and secure tracking.</p>
+        <div class="step">
+            <strong>3 — Slot secured</strong>
+            The first confirmed patient locks the appointment.
         </div>
     </div>
 </section>
 
 <section class="closing">
     <h2>Empty chairs are operational leakage.</h2>
-    <p>SwiftSlot gives you control over them.</p>
+    <p>
+        SwiftSlot provides a disciplined, automated way to reduce it.
+    </p>
     <br>
-    <a href="/signup-page" class="btn-primary">Start Free Trial</a>
+    <a href="/signup-page" class="btn-primary">Book a demo</a>
 </section>
 
 <div class="footer">
-    © 2026 SwiftSlot — Appointment Recovery for Dental Practices
+    © 2026 SwiftSlot — Dental Operational Recovery System
 </div>
 
 </body>
