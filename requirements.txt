@@ -6,4 +6,7 @@ pydantic[email]
 pydantic-settings
 python-dotenv
 jinja2
-
+passlib[bcrypt]
+python-jose
+authlib
+itsdangerous
