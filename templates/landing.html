@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SwiftSlot — Clinical Slot Recovery</title>
+<title>SwiftSlot — Recover Cancelled Appointments Automatically</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -10,6 +10,7 @@ body{
     font-family:Inter,sans-serif;
     background:#f1f5f9;
     min-height:100vh;
+    color:#0f172a;
 }
 .navbar{
     background:#0d1b3e;
@@ -39,20 +40,20 @@ body{
     color:white;
 }
 .hero{
-    padding:100px 40px;
+    padding:120px 40px 80px 40px;
     text-align:center;
+    max-width:900px;
+    margin:auto;
 }
 .hero h1{
-    font-size:42px;
+    font-size:44px;
     font-weight:800;
-    color:#0f172a;
     margin-bottom:18px;
 }
 .hero p{
     font-size:18px;
     color:#64748b;
-    max-width:700px;
-    margin:0 auto 40px auto;
+    margin-bottom:30px;
 }
 .hero-buttons{
     display:flex;
@@ -75,11 +76,26 @@ body{
     text-decoration:none;
     font-weight:700;
 }
-.features{
+.section{
     padding:80px 40px;
+    max-width:1100px;
+    margin:auto;
+}
+.section h2{
+    font-size:28px;
+    font-weight:800;
+    margin-bottom:18px;
+}
+.section p{
+    color:#64748b;
+    font-size:16px;
+    line-height:1.6;
+}
+.features{
     display:grid;
     grid-template-columns:repeat(3,1fr);
     gap:24px;
+    margin-top:40px;
 }
 .feature-card{
     background:white;
@@ -91,15 +107,20 @@ body{
     font-size:18px;
     font-weight:700;
     margin-bottom:12px;
-    color:#0f172a;
 }
-.feature-card p{
-    font-size:14px;
-    color:#64748b;
+.revenue-box{
+    background:white;
+    padding:40px;
+    border-radius:16px;
+    margin-top:30px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.05);
+}
+.revenue-box strong{
+    font-size:20px;
 }
 .footer{
     text-align:center;
-    padding:40px;
+    padding:60px 20px;
     font-size:12px;
     color:#94a3b8;
 }
@@ -119,11 +140,11 @@ body{
 </div>
 
 <section class="hero">
-    <h1>Recover Cancelled Appointments Automatically</h1>
+    <h1>Recover Cancelled Dental Appointments in Minutes</h1>
     <p>
-        SwiftSlot helps dental and medical clinics recover lost revenue
-        by broadcasting short-notice appointments to consented waitlists.
-        Fill cancelled slots in minutes — not hours.
+        SwiftSlot automatically fills last‑minute cancellations by
+        broadcasting short‑notice appointments to your consented waitlist.
+        No manual calling. No wasted chair time.
     </p>
     <div class="hero-buttons">
         <a href="/signup-page" class="btn-primary">Start Free Trial</a>
@@ -131,23 +152,49 @@ body{
     </div>
 </section>
 
-<section class="features">
-    <div class="feature-card">
-        <h3>Instant Broadcast</h3>
-        <p>Send secure email offers to waitlisted patients instantly.</p>
-    </div>
-    <div class="feature-card">
-        <h3>Automatic Slot Locking</h3>
-        <p>The first patient to accept locks the appointment automatically.</p>
-    </div>
-    <div class="feature-card">
-        <h3>Recovery Analytics</h3>
-        <p>Track recovery rates, declines, and slot performance.</p>
+<section class="section">
+    <h2>The Cost of Empty Chairs</h2>
+    <p>
+        If your practice averages just 10 cancelled appointments per week at £120 per slot,
+        that's £4,800 in lost monthly revenue.
+    </p>
+
+    <div class="revenue-box">
+        <p>
+            If SwiftSlot recovers even <strong>30%</strong> of those cancellations,
+            that’s over <strong>£1,400 per month recovered</strong>.
+        </p>
     </div>
 </section>
 
+<section class="section">
+    <h2>Built for Dental Practices</h2>
+    <div class="features">
+        <div class="feature-card">
+            <h3>Instant Broadcast</h3>
+            <p>Send secure offers to waitlisted patients instantly.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Automatic Slot Locking</h3>
+            <p>The first patient to accept locks the appointment automatically.</p>
+        </div>
+        <div class="feature-card">
+            <h3>Recovery Analytics</h3>
+            <p>Track recovery rates and optimise performance.</p>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <h2>Simple, Transparent Pricing</h2>
+    <p>
+        One monthly subscription. Unlimited broadcasts.
+        No setup fees. Cancel anytime.
+    </p>
+</section>
+
 <div class="footer">
-    © 2026 SwiftSlot — Clinical Recovery Platform
+    © 2026 SwiftSlot — Appointment Recovery Platform
 </div>
 
 </body>
