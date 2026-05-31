@@ -16,7 +16,7 @@ from typing import Annotated
 import asyncpg
 import resend
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -183,6 +183,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SwiftSlot Sidecar Pilot", version="0.2.0", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/dashboard")
 
 
 @app.get("/health")
