@@ -239,7 +239,7 @@ async def health_check(request: Request):
     }
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/app/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     auth_redirect = require_auth(request)
     if auth_redirect:
@@ -248,31 +248,31 @@ async def dashboard(request: Request):
     return HTMLResponse(html)
 
 
-@app.get("/waitlist", response_class=HTMLResponse)
+@app.get("/app/waitlist", response_class=HTMLResponse)
 async def waitlist(request: Request):
     html = (BASE_DIR / "templates" / "waitlist.html").read_text()
     return HTMLResponse(html)
 
 
-@app.get("/broadcasts", response_class=HTMLResponse)
+@app.get("/app/broadcasts", response_class=HTMLResponse)
 async def broadcasts(request: Request):
     html = (BASE_DIR / "templates" / "broadcasts.html").read_text()
     return HTMLResponse(html)
 
 
-@app.get("/appointments", response_class=HTMLResponse)
+@app.get("/app/appointments", response_class=HTMLResponse)
 async def appointments(request: Request):
     html = (BASE_DIR / "templates" / "appointments.html").read_text()
     return HTMLResponse(html)
 
 
-@app.get("/analytics", response_class=HTMLResponse)
+@app.get("/app/analytics", response_class=HTMLResponse)
 async def analytics(request: Request):
     html = (BASE_DIR / "templates" / "analytics.html").read_text()
     return HTMLResponse(html)
 
 
-@app.get("/settings", response_class=HTMLResponse)
+@app.get("/app/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     html = (BASE_DIR / "templates" / "settings.html").read_text()
     return HTMLResponse(html)
