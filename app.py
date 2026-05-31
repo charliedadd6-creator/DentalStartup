@@ -838,6 +838,30 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             """
         )
 
+        # =========================
+        # AUTH TABLES
+        # =========================
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS clinics (
+            id UUID PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """)
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id UUID PRIMARY KEY,
+            clinic_id UUID NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+            email TEXT NOT NULL UNIQUE,
+            hashed_password TEXT,
+            google_id TEXT UNIQUE,
+            is_owner BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """)
+
 
 async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferRequest) -> asyncpg.Record:
     slot_id = uuid.uuid4()
