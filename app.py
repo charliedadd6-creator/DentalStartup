@@ -201,9 +201,12 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 
 
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/dashboard")
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    if request.session.get("user_id"):
+        return RedirectResponse(url="/app/dashboard")
+    html = (BASE_DIR / "templates" / "landing.html").read_text()
+    return HTMLResponse(html)
 
 
 @app.get("/login-page", response_class=HTMLResponse)

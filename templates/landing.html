@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SwiftSlot — Clinical Slot Recovery</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+    font-family:Inter,sans-serif;
+    background:#f1f5f9;
+    min-height:100vh;
+}
+.navbar{
+    background:#0d1b3e;
+    padding:18px 40px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    color:white;
+}
+.logo{
+    font-weight:800;
+    font-size:16px;
+}
+.nav-actions a{
+    text-decoration:none;
+    margin-left:18px;
+    font-size:13px;
+    font-weight:600;
+}
+.login-link{
+    color:white;
+}
+.cta{
+    background:linear-gradient(135deg,#1e3a8a,#2563eb);
+    padding:8px 16px;
+    border-radius:8px;
+    color:white;
+}
+.hero{
+    padding:100px 40px;
+    text-align:center;
+}
+.hero h1{
+    font-size:42px;
+    font-weight:800;
+    color:#0f172a;
+    margin-bottom:18px;
+}
+.hero p{
+    font-size:18px;
+    color:#64748b;
+    max-width:700px;
+    margin:0 auto 40px auto;
+}
+.hero-buttons{
+    display:flex;
+    justify-content:center;
+    gap:16px;
+}
+.btn-primary{
+    background:linear-gradient(135deg,#1e3a8a,#2563eb);
+    padding:14px 28px;
+    border-radius:10px;
+    color:white;
+    text-decoration:none;
+    font-weight:700;
+}
+.btn-secondary{
+    border:2px solid #1e3a8a;
+    padding:12px 26px;
+    border-radius:10px;
+    color:#1e3a8a;
+    text-decoration:none;
+    font-weight:700;
+}
+.features{
+    padding:80px 40px;
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:24px;
+}
+.feature-card{
+    background:white;
+    border-radius:16px;
+    padding:28px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.05);
+}
+.feature-card h3{
+    font-size:18px;
+    font-weight:700;
+    margin-bottom:12px;
+    color:#0f172a;
+}
+.feature-card p{
+    font-size:14px;
+    color:#64748b;
+}
+.footer{
+    text-align:center;
+    padding:40px;
+    font-size:12px;
+    color:#94a3b8;
+}
+@media(max-width:900px){
+    .features{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="navbar">
+    <div class="logo">SwiftSlot</div>
+    <div class="nav-actions">
+        <a href="/login-page" class="login-link">Login</a>
+        <a href="/signup-page" class="cta">Start Free Trial</a>
+    </div>
+</div>
+
+<section class="hero">
+    <h1>Recover Cancelled Appointments Automatically</h1>
+    <p>
+        SwiftSlot helps dental and medical clinics recover lost revenue
+        by broadcasting short-notice appointments to consented waitlists.
+        Fill cancelled slots in minutes — not hours.
+    </p>
+    <div class="hero-buttons">
+        <a href="/signup-page" class="btn-primary">Start Free Trial</a>
+        <a href="/login-page" class="btn-secondary">Login</a>
+    </div>
+</section>
+
+<section class="features">
+    <div class="feature-card">
+        <h3>Instant Broadcast</h3>
+        <p>Send secure email offers to waitlisted patients instantly.</p>
+    </div>
+    <div class="feature-card">
+        <h3>Automatic Slot Locking</h3>
+        <p>The first patient to accept locks the appointment automatically.</p>
+    </div>
+    <div class="feature-card">
+        <h3>Recovery Analytics</h3>
+        <p>Track recovery rates, declines, and slot performance.</p>
+    </div>
+</section>
+
+<div class="footer">
+    © 2026 SwiftSlot — Clinical Recovery Platform
+</div>
+
+</body>
+</html>
