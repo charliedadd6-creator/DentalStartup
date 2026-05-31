@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from starlette.middleware.sessions import SessionMiddleware
 
 logger = logging.getLogger("swiftslot")
 logging.basicConfig(level=logging.INFO)
@@ -182,6 +183,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SwiftSlot Sidecar Pilot", version="0.2.0", lifespan=lifespan)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET", "dev-secret-change-this"),
+    same_site="lax",
+    https_only=True
+)
 templates = Jinja2Templates(directory="templates")
 
 
