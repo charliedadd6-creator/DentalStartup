@@ -34,6 +34,13 @@ resend.api_key = os.getenv("RESEND_API_KEY")
 SECRET_KEY = b"swiftslot-clinical-pilot-secret-2026"
 
 
+def require_auth(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return RedirectResponse(url="/login-page")
+    return None
+
+
 def generate_secure_token(offer_id: str) -> str:
     timestamp = int(time.time())
     payload = f"{offer_id}:{timestamp}".encode("utf-8")
@@ -199,6 +206,18 @@ async def root():
     return RedirectResponse(url="/dashboard")
 
 
+@app.get("/login-page", response_class=HTMLResponse)
+async def login_page():
+    html = (BASE_DIR / "templates" / "login.html").read_text()
+    return HTMLResponse(html)
+
+
+@app.get("/signup-page", response_class=HTMLResponse)
+async def signup_page():
+    html = (BASE_DIR / "templates" / "signup.html").read_text()
+    return HTMLResponse(html)
+
+
 @app.get("/health")
 async def health_check(request: Request):
     db_status = "disconnected"
@@ -222,6 +241,9 @@ async def health_check(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "dashboard.html").read_text()
     return HTMLResponse(html)
 
