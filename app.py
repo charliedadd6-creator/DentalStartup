@@ -828,7 +828,7 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
     request.session["user_id"] = user_id
     request.session["clinic_id"] = clinic_id
 
-    return JSONResponse({"status": "signup_success"})
+    return RedirectResponse(url="/app/dashboard", status_code=303)
 
 
 @app.post("/login")
@@ -854,7 +854,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
     request.session["user_id"] = str(user["id"])
     request.session["clinic_id"] = str(user["clinic_id"])
 
-    return JSONResponse({"status": "login_success"})
+    return RedirectResponse(url="/app/dashboard", status_code=303)
 
 
 @app.post("/logout")
