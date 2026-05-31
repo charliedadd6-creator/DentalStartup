@@ -793,6 +793,11 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
 async def signup(request: Request, clinic_name: str = Form(...), email: str = Form(...), password: str = Form(...)):
     pool = request.app.state.pool
 
+    try:
+        hashed = hash_password(password)
+    except ValueError:
+        return JSONResponse({"error": "Password too long (max 72 characters)"}, status_code=400)
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             clinic_id = generate_uuid()
@@ -817,7 +822,7 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
                 user_id,
                 clinic_id,
                 email,
-                hash_password(password)
+                hashed
             )
 
     request.session["user_id"] = user_id
