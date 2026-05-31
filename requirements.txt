@@ -10,3 +10,4 @@ passlib[bcrypt]
 python-jose
 authlib
 itsdangerous
+python-multipart
