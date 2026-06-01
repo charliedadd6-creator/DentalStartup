@@ -31,7 +31,10 @@ log = logger
 BASE_DIR = Path(__file__).resolve().parent
 SMTP_SEMAPHORE = asyncio.Semaphore(5)
 resend.api_key = os.getenv("RESEND_API_KEY")
-SECRET_KEY = b"swiftslot-clinical-pilot-secret-2026"
+TOKEN_SECRET = os.getenv("TOKEN_SECRET", "")
+if not TOKEN_SECRET:
+    TOKEN_SECRET = "dev-token-secret-change-this"
+SECRET_KEY = TOKEN_SECRET.encode("utf-8")
 
 
 def require_auth(request: Request):
@@ -361,7 +364,7 @@ async def broadcast(
         client_ip=http_request.client.host if http_request.client else None,
         details={"offers_sent": len(offers), "clinician": request.clinician},
     )
-    return await build_broadcast_response(http_request.app.state.pool, slot["id"])
+    return await build_broadcast_response(http_request.app.state.pool, slot["id"], clinic_id)
 
 
 @app.get("/api/broadcasts")
@@ -638,7 +641,12 @@ async def api_create_patient(request: Request, patient: PatientCreate):
 
 @app.get("/slot-status/{slot_id}", response_model=SlotStatusResponse)
 async def slot_status(slot_id: str, request: Request) -> SlotStatusResponse:
-    slot = await get_slot_or_404(request.app.state.pool, slot_id)
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    slot = await get_slot_or_404(request.app.state.pool, slot_id, clinic_id)
     return await build_slot_status_response(request.app.state.pool, slot)
 
 
@@ -828,7 +836,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
         async with conn.transaction():
             offer = await conn.fetchrow(
                 """
-                SELECT id, slot_id, patient_email
+                SELECT id, slot_id, patient_email, status
                 FROM waitlist_offers
                 WHERE id = $1
                 FOR UPDATE
@@ -838,9 +846,30 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
             if not offer:
                 raise HTTPException(status_code=404, detail="Offer not found")
 
+            if offer["status"] == "accepted":
+                return HTMLResponse(
+                    "<h1>Appointment Already Confirmed</h1><p>This offer has already been accepted.</p>",
+                    status_code=200,
+                )
+            if offer["status"] == "declined":
+                return HTMLResponse(
+                    "<h1>Offer Already Declined</h1><p>This appointment offer was already declined.</p>",
+                    status_code=409,
+                )
+            if offer["status"] == "expired":
+                return HTMLResponse(
+                    "<h1>Offer Expired</h1><p>This appointment offer has expired.</p>",
+                    status_code=409,
+                )
+            if offer["status"] != "sent":
+                return HTMLResponse(
+                    "<h1>Offer Unavailable</h1><p>This appointment offer can no longer be accepted.</p>",
+                    status_code=409,
+                )
+
             slot = await conn.fetchrow(
                 """
-                SELECT id, slot_time, clinician, status, accepted_by
+                SELECT id, clinic_id, slot_time, clinician, status, accepted_by
                 FROM waitlist_slots
                 WHERE id = $1
                 FOR UPDATE
@@ -879,16 +908,18 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                 """
                 UPDATE waitlist_offers
                 SET status = 'expired'
-                WHERE slot_id = $1 AND id <> $2
+                WHERE slot_id = $1 AND id <> $2 AND clinic_id = $3
                 """,
                 slot["id"],
                 offer["id"],
+                slot["clinic_id"],
             )
 
     background_tasks.add_task(
         log_clinical_event,
         pool,
         "offer_accepted",
+        clinic_id=str(slot["clinic_id"]),
         slot_id=str(slot["id"]),
         offer_id=str(offer["id"]),
         patient_email=str(offer["patient_email"]),
@@ -1500,9 +1531,10 @@ async def create_waitlist_offers(
         )
 
 
-async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str) -> asyncpg.Record:
+async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str, clinic_id: str) -> asyncpg.Record:
     try:
         parsed_slot_id = uuid.UUID(slot_id)
+        parsed_clinic_id = uuid.UUID(str(clinic_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Slot not found") from exc
 
@@ -1511,17 +1543,18 @@ async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str) -> asyncpg.Record:
             """
             SELECT id::text, clinic_id::text, slot_time, clinician, status, accepted_by, locked_at
             FROM waitlist_slots
-            WHERE id = $1
+            WHERE id = $1 AND clinic_id = $2
             """,
             parsed_slot_id,
+            parsed_clinic_id,
         )
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
     return slot
 
 
-async def build_broadcast_response(pool: asyncpg.Pool, slot_id: str) -> BroadcastResponse:
-    slot = await get_slot_or_404(pool, slot_id)
+async def build_broadcast_response(pool: asyncpg.Pool, slot_id: str, clinic_id: str) -> BroadcastResponse:
+    slot = await get_slot_or_404(pool, slot_id, clinic_id)
     status = await build_slot_status_response(pool, slot)
     return BroadcastResponse(**status.model_dump(exclude={"locked_at", "offers"}))
 
