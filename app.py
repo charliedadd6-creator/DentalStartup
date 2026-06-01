@@ -192,11 +192,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SwiftSlot Sidecar Pilot", version="0.2.0", lifespan=lifespan)
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET", "dev-secret-change-this"),
     same_site="lax",
-    https_only=True
+    https_only=SESSION_COOKIE_SECURE
 )
 templates = Jinja2Templates(directory="templates")
 
@@ -253,30 +255,45 @@ async def dashboard(request: Request):
 
 @app.get("/app/waitlist", response_class=HTMLResponse)
 async def waitlist(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "waitlist.html").read_text()
     return HTMLResponse(html)
 
 
 @app.get("/app/broadcasts", response_class=HTMLResponse)
 async def broadcasts(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "broadcasts.html").read_text()
     return HTMLResponse(html)
 
 
 @app.get("/app/appointments", response_class=HTMLResponse)
 async def appointments(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "appointments.html").read_text()
     return HTMLResponse(html)
 
 
 @app.get("/app/analytics", response_class=HTMLResponse)
 async def analytics(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "analytics.html").read_text()
     return HTMLResponse(html)
 
 
 @app.get("/app/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
     html = (BASE_DIR / "templates" / "settings.html").read_text()
     return HTMLResponse(html)
 
@@ -287,6 +304,10 @@ async def broadcast(
     background_tasks: BackgroundTasks,
     http_request: Request,
 ) -> BroadcastResponse:
+    auth_redirect = require_auth(http_request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     slot = await create_broadcast_slot(http_request.app.state.pool, request)
     offers = await create_waitlist_offers(http_request.app.state.pool, slot["id"], request.patient_emails)
     background_tasks.add_task(send_waitlist_offer_emails, slot, offers)
@@ -798,37 +819,42 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
     except ValueError:
         return JSONResponse({"error": "Password too long (max 72 characters)"}, status_code=400)
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            clinic_id = generate_uuid()
-            user_id = generate_uuid()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                clinic_id = generate_uuid()
+                user_id = generate_uuid()
 
-            # Create clinic
-            await conn.execute(
-                """
-                INSERT INTO clinics (id, name)
-                VALUES ($1, $2)
-                """,
-                clinic_id,
-                clinic_name
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO clinics (id, name)
+                    VALUES ($1, $2)
+                    """,
+                    clinic_id,
+                    clinic_name
+                )
 
-            # Create user
-            await conn.execute(
-                """
-                INSERT INTO users (id, clinic_id, email, hashed_password, is_owner)
-                VALUES ($1, $2, $3, $4, TRUE)
-                """,
-                user_id,
-                clinic_id,
-                email,
-                hashed
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO users (id, clinic_id, email, hashed_password, is_owner)
+                    VALUES ($1, $2, $3, $4, TRUE)
+                    """,
+                    user_id,
+                    clinic_id,
+                    email.lower().strip(),
+                    hashed
+                )
 
-    request.session["user_id"] = user_id
-    request.session["clinic_id"] = clinic_id
+        request.session["user_id"] = str(user_id)
+        request.session["clinic_id"] = str(clinic_id)
 
-    return RedirectResponse(url="/app/dashboard", status_code=303)
+        return RedirectResponse(url="/app/dashboard", status_code=303)
+
+    except asyncpg.UniqueViolationError:
+        return JSONResponse({"error": "An account with this email already exists"}, status_code=400)
+    except Exception as e:
+        log.error(f"Signup error: {e}", exc_info=True)
+        return JSONResponse({"error": "Account creation failed. Please try again."}, status_code=500)
 
 
 @app.post("/login")
