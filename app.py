@@ -111,6 +111,8 @@ logging.getLogger("swiftslot").setLevel(settings.log_level.upper())
 class DashboardOfferRequest(BaseModel):
     slot_time: datetime
     clinician: str | None = Field(default=None, max_length=160)
+    appointment_type: str | None = Field(default=None, max_length=120)
+    slot_value_pence: int = 0
     patient_emails: Annotated[list[EmailStr], Field(min_length=1, max_length=100)]
 
     @field_validator("slot_time")
@@ -119,6 +121,13 @@ class DashboardOfferRequest(BaseModel):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    @field_validator("slot_value_pence")
+    @classmethod
+    def validate_slot_value_pence(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("slot_value_pence cannot be negative")
+        return value
 
     @field_validator("patient_emails")
     @classmethod
@@ -131,6 +140,15 @@ class DashboardOfferRequest(BaseModel):
                 seen.add(normalized)
                 deduped.append(email)
         return deduped
+
+
+class PatientCreate(BaseModel):
+    first_name: str
+    last_name: str | None = None
+    email: EmailStr
+    phone: str | None = None
+    consent_status: str = "consented"
+    notes: str | None = None
 
 
 class BroadcastResponse(BaseModel):
@@ -360,6 +378,8 @@ async def api_broadcasts(request: Request):
                 s.id::text AS id,
                 s.slot_time,
                 s.clinician,
+                s.appointment_type,
+                s.slot_value_pence,
                 s.status,
                 s.accepted_by,
                 s.created_at,
@@ -386,6 +406,9 @@ async def api_broadcasts(request: Request):
             "id": row["id"],
             "slot_time": iso_or_none(row["slot_time"]),
             "clinician": row["clinician"],
+            "appointment_type": row["appointment_type"],
+            "slot_value_pence": row["slot_value_pence"],
+            "slot_value": row["slot_value_pence"],
             "status": row["status"],
             "accepted_by": row["accepted_by"],
             "created_at": iso_or_none(row["created_at"]),
@@ -415,6 +438,8 @@ async def api_recovered_appointments(request: Request):
                 accepted_by AS patient,
                 slot_time,
                 clinician,
+                appointment_type,
+                slot_value_pence,
                 status,
                 locked_at AS confirmed_at
             FROM waitlist_slots
@@ -432,6 +457,8 @@ async def api_recovered_appointments(request: Request):
             "patient": row["patient"],
             "slot_time": iso_or_none(row["slot_time"]),
             "clinician": row["clinician"],
+            "appointment_type": row["appointment_type"],
+            "slot_value_pence": row["slot_value_pence"],
             "status": row["status"],
             "confirmed_at": iso_or_none(row["confirmed_at"]),
         }
@@ -451,7 +478,10 @@ async def api_analytics_summary(request: Request):
             """
             SELECT
                 COUNT(*)::int AS total_broadcasts,
-                (COUNT(*) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL))::int AS slots_recovered
+                (COUNT(*) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL))::int AS slots_recovered,
+                COALESCE(SUM(slot_value_pence), 0)::int AS total_revenue_at_risk_pence,
+                COALESCE(SUM(slot_value_pence) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL), 0)::int AS total_revenue_saved_pence,
+                AVG(slot_value_pence) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL)::float AS average_recovered_slot_value_pence
             FROM waitlist_slots
             WHERE clinic_id = $1;
             """,
@@ -490,6 +520,7 @@ async def api_analytics_summary(request: Request):
     slots_recovered = slot_summary["slots_recovered"] if slot_summary else 0
     recovery_rate = round((slots_recovered / total_broadcasts) * 100, 1) if total_broadcasts else 0.0
     avg_response = offer_summary["avg_response_minutes"] if offer_summary else None
+    avg_recovered_value = slot_summary["average_recovered_slot_value_pence"] if slot_summary else None
 
     return {
         "total_broadcasts": total_broadcasts,
@@ -501,11 +532,107 @@ async def api_analytics_summary(request: Request):
         "expired_offers": offer_summary["expired_offers"] if offer_summary else 0,
         "pending_offers": offer_summary["pending_offers"] if offer_summary else 0,
         "avg_response_minutes": round(avg_response, 1) if avg_response is not None else None,
+        "total_revenue_saved_pence": slot_summary["total_revenue_saved_pence"] if slot_summary else 0,
+        "total_revenue_at_risk_pence": slot_summary["total_revenue_at_risk_pence"] if slot_summary else 0,
+        "average_recovered_slot_value_pence": round(avg_recovered_value) if avg_recovered_value is not None else None,
         "top_clinicians": [
             {"clinician": row["clinician"], "recovered": row["recovered"]}
             for row in top_rows
         ],
         "total_revenue_saved": None,
+    }
+
+
+@app.get("/api/patients")
+async def api_patients(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, first_name, last_name, email, phone, consent_status,
+                   consent_source, consented_at, notes, created_at, updated_at
+            FROM patients
+            WHERE clinic_id = $1
+            ORDER BY created_at DESC;
+            """,
+            clinic_uuid,
+        )
+
+    patients = [
+        {
+            "id": row["id"],
+            "first_name": row["first_name"],
+            "last_name": row["last_name"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "consent_status": row["consent_status"],
+            "consent_source": row["consent_source"],
+            "consented_at": iso_or_none(row["consented_at"]),
+            "notes": row["notes"],
+            "created_at": iso_or_none(row["created_at"]),
+            "updated_at": iso_or_none(row["updated_at"]),
+        }
+        for row in rows
+    ]
+    return {
+        "patients": patients,
+        "total": len(patients),
+        "consented": sum(1 for patient in patients if patient["consent_status"] == "consented"),
+    }
+
+
+@app.post("/api/patients")
+async def api_create_patient(request: Request, patient: PatientCreate):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    patient_id = uuid.uuid4()
+    email = str(patient.email).lower().strip()
+    consented_at = datetime.now(timezone.utc) if patient.consent_status == "consented" else None
+
+    try:
+        async with request.app.state.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO patients (
+                    id, clinic_id, first_name, last_name, email, phone,
+                    consent_status, consent_source, consented_at, notes
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual', $8, $9)
+                RETURNING id::text, first_name, last_name, email, phone, consent_status,
+                          consent_source, consented_at, notes, created_at, updated_at;
+                """,
+                patient_id,
+                clinic_uuid,
+                patient.first_name.strip(),
+                patient.last_name.strip() if patient.last_name else None,
+                email,
+                patient.phone.strip() if patient.phone else None,
+                patient.consent_status,
+                consented_at,
+                patient.notes,
+            )
+    except asyncpg.UniqueViolationError:
+        return JSONResponse({"error": "Patient already exists on this waitlist"}, status_code=400)
+
+    return {
+        "id": row["id"],
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "email": row["email"],
+        "phone": row["phone"],
+        "consent_status": row["consent_status"],
+        "consent_source": row["consent_source"],
+        "consented_at": iso_or_none(row["consented_at"]),
+        "notes": row["notes"],
+        "created_at": iso_or_none(row["created_at"]),
+        "updated_at": iso_or_none(row["updated_at"]),
     }
 
 
@@ -1132,6 +1259,38 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         );
         """)
 
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS patients (
+            id UUID PRIMARY KEY,
+            clinic_id UUID NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+            first_name TEXT NOT NULL,
+            last_name TEXT,
+            email TEXT NOT NULL,
+            phone TEXT,
+            consent_status TEXT NOT NULL DEFAULT 'consented',
+            consent_source TEXT DEFAULT 'manual',
+            consented_at TIMESTAMPTZ,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """)
+
+        await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_patients_clinic_email
+        ON patients(clinic_id, lower(email));
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_clinic_id
+        ON patients(clinic_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_consent_status
+        ON patients(consent_status);
+        """)
+
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS waitlist_slots (
@@ -1139,6 +1298,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
                 clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE,
                 slot_time TIMESTAMPTZ NOT NULL,
                 clinician TEXT,
+                appointment_type TEXT,
+                slot_value_pence INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'broadcasting',
                 accepted_by TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1196,6 +1357,16 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         """)
 
         await conn.execute("""
+        ALTER TABLE waitlist_slots
+        ADD COLUMN IF NOT EXISTS appointment_type TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_slots
+        ADD COLUMN IF NOT EXISTS slot_value_pence INTEGER NOT NULL DEFAULT 0;
+        """)
+
+        await conn.execute("""
         ALTER TABLE waitlist_offers
         ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE;
         """)
@@ -1227,14 +1398,18 @@ async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferReque
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            INSERT INTO waitlist_slots (id, clinic_id, slot_time, clinician, status)
-            VALUES ($1, $2, $3, $4, 'broadcasting')
+            INSERT INTO waitlist_slots (
+                id, clinic_id, slot_time, clinician, appointment_type, slot_value_pence, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'broadcasting')
             RETURNING id::text, slot_time, clinician, status, accepted_by, locked_at
             """,
             slot_id,
             clinic_uuid,
             request.slot_time,
             request.clinician,
+            request.appointment_type,
+            request.slot_value_pence,
         )
 
 

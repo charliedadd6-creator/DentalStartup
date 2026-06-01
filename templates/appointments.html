@@ -119,13 +119,15 @@
                         <th>Patient</th>
                         <th>Slot Date & Time</th>
                         <th>Clinician</th>
+                        <th>Type</th>
+                        <th>Slot Value</th>
                         <th>Status</th>
                         <th>Confirmed At</th>
                     </tr>
                 </thead>
                 <tbody id="appointmentRows">
                     <tr>
-                        <td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">
+                        <td colspan="7" style="text-align:center; padding:48px; color:#94a3b8;">
                             No recovered appointments yet.
                         </td>
                     </tr>
@@ -151,8 +153,9 @@
     var cls=status==='locked'?'chip-green':'chip-gray';
     return '<span class="chip '+cls+'">'+esc(status || 'confirmed')+'</span>';
   }
+  function money(pence){ return '£'+((pence||0)/100).toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:2}); }
   function empty(message){
-    return '<tr><td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
+    return '<tr><td colspan="7" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
   }
   function isToday(value){
     if(!value) return false;
@@ -184,6 +187,8 @@
           '<td>'+esc(row.patient)+'</td>'+
           '<td>'+esc(fmtDate(row.slot_time))+'</td>'+
           '<td>'+esc(row.clinician)+'</td>'+
+          '<td>'+esc(row.appointment_type)+'</td>'+
+          '<td>'+esc(money(row.slot_value_pence))+'</td>'+
           '<td>'+chip(row.status)+'</td>'+
           '<td>'+esc(fmtDate(row.confirmed_at))+'</td>'+
         '</tr>';

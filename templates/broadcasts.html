@@ -121,6 +121,8 @@
                     <tr>
                         <th>Slot Date & Time</th>
                         <th>Clinician</th>
+                        <th>Type</th>
+                        <th>Slot Value</th>
                         <th>Offers Sent</th>
                         <th>Status</th>
                         <th>Accepted By</th>
@@ -129,7 +131,7 @@
                 </thead>
                 <tbody id="broadcastRows">
                     <tr>
-                        <td colspan="6" style="text-align:center; padding:48px; color:#94a3b8;">
+                        <td colspan="8" style="text-align:center; padding:48px; color:#94a3b8;">
                             No broadcasts yet. Start one from the Dashboard.
                         </td>
                     </tr>
@@ -155,8 +157,9 @@
     var cls=status==='locked'?'chip-green':status==='broadcasting'?'chip-blue':status==='declined'?'chip-amber':'chip-gray';
     return '<span class="chip '+cls+'">'+esc(status || 'unknown')+'</span>';
   }
+  function money(pence){ return '£'+((pence||0)/100).toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:2}); }
   function empty(message){
-    return '<tr><td colspan="6" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
+    return '<tr><td colspan="8" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
   }
 
   fetch('/api/broadcasts')
@@ -177,6 +180,8 @@
         return '<tr>'+
           '<td>'+esc(fmtDate(row.slot_time))+'</td>'+
           '<td>'+esc(row.clinician)+'</td>'+
+          '<td>'+esc(row.appointment_type)+'</td>'+
+          '<td>'+esc(money(row.slot_value_pence))+'</td>'+
           '<td>'+esc(row.offers_sent)+'</td>'+
           '<td>'+chip(row.status)+'</td>'+
           '<td>'+esc(row.accepted_by)+'</td>'+

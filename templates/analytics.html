@@ -127,6 +127,14 @@
                         <span class="stat-label">Pending</span>
                         <span class="stat-value" id="breakdownPending">0</span>
                     </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Revenue at Risk</span>
+                        <span class="stat-value" id="revenueAtRisk">£0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Avg Recovered Slot Value</span>
+                        <span class="stat-value" id="avgRecoveredValue">—</span>
+                    </div>
                 </div>
             </div>
             <div class="panel">
@@ -151,18 +159,21 @@
       .replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+  function money(pence){ return '£'+((pence||0)/100).toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:2}); }
 
   fetch('/api/analytics/summary')
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
     .then(function(data){
       setText('analyticsRecoveryRate', (data.recovery_rate || 0).toFixed ? data.recovery_rate.toFixed(1)+'%' : data.recovery_rate+'%');
       setText('analyticsAvgResponse', data.avg_response_minutes == null ? '—' : data.avg_response_minutes+'m');
-      setText('analyticsRevenue', '—');
+      setText('analyticsRevenue', money(data.total_revenue_saved_pence || 0));
       setText('analyticsAcceptedOffers', data.accepted_offers || 0);
       setText('breakdownAccepted', data.accepted_offers || 0);
       setText('breakdownDeclined', data.declined_offers || 0);
       setText('breakdownExpired', data.expired_offers || 0);
       setText('breakdownPending', data.pending_offers || 0);
+      setText('revenueAtRisk', money(data.total_revenue_at_risk_pence || 0));
+      setText('avgRecoveredValue', data.average_recovered_slot_value_pence == null ? '—' : money(data.average_recovered_slot_value_pence));
 
       var top=byId('topClinicians');
       if(!top) return;

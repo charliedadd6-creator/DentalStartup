@@ -784,6 +784,25 @@ Logout
               <div class="f-hint">Included in the patient notification</div>
             </div>
           </div>
+          <div class="input-row" style="margin-top:14px">
+            <div>
+              <label class="field-label" for="appointmentType">Appointment Type</label>
+              <select class="f-input" id="appointmentType">
+                <option value="Check-up">Check-up</option>
+                <option value="Hygienist">Hygienist</option>
+                <option value="Emergency">Emergency</option>
+                <option value="Consultation">Consultation</option>
+                <option value="Treatment">Treatment</option>
+                <option value="Other">Other</option>
+              </select>
+              <div class="f-hint">Used for reporting and revenue analysis</div>
+            </div>
+            <div>
+              <label class="field-label" for="slotValue">Slot Value (£)</label>
+              <input class="f-input" type="number" id="slotValue" placeholder="95" min="0" step="0.01">
+              <div class="f-hint">Estimated value of the recovered chair time</div>
+            </div>
+          </div>
         </div>
 
         <!-- STEP 2 -->
@@ -1503,9 +1522,11 @@ ti.addEventListener('paste',function(e){
 
 document.getElementById('slotTime').addEventListener('change',updateResetBtn);
 document.getElementById('clinician').addEventListener('input',updateResetBtn);
+document.getElementById('appointmentType').addEventListener('change',updateResetBtn);
+document.getElementById('slotValue').addEventListener('input',updateResetBtn);
 
 function updateResetBtn(){
-  var has=S.tags.length>0||document.getElementById('slotTime').value||document.getElementById('clinician').value;
+  var has=S.tags.length>0||document.getElementById('slotTime').value||document.getElementById('clinician').value||document.getElementById('slotValue').value;
   var btn=document.getElementById('resetBtn');
   btn.className='btn-ghost'+(has&&!S.broadcast?' show':'');
 }
@@ -1514,6 +1535,8 @@ function updateResetBtn(){
 function lockForm(){
   document.getElementById('slotTime').disabled=true;
   document.getElementById('clinician').disabled=true;
+  document.getElementById('appointmentType').disabled=true;
+  document.getElementById('slotValue').disabled=true;
   document.getElementById('tagInput').disabled=true;
   addClass('tagArea', 'locked');
   var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
@@ -1525,6 +1548,8 @@ function lockForm(){
 function unlockForm(){
   document.getElementById('slotTime').disabled=false;
   document.getElementById('clinician').disabled=false;
+  document.getElementById('appointmentType').disabled=false;
+  document.getElementById('slotValue').disabled=false;
   document.getElementById('tagInput').disabled=false;
   removeClass('tagArea', 'locked');
   var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
@@ -1543,7 +1568,10 @@ function unlockForm(){
 document.getElementById('broadcastBtn').addEventListener('click',function(){
   var sv=document.getElementById('slotTime').value;
   var cl=document.getElementById('clinician').value.trim();
+  var appt=document.getElementById('appointmentType').value;
+  var slotValuePounds=parseFloat(document.getElementById('slotValue').value||'0');
   if(!sv){ addLog('ERROR','Slot date and time is required'); document.getElementById('slotTime').focus(); return; }
+  if(isNaN(slotValuePounds)||slotValuePounds<0){ addLog('ERROR','Slot value must be zero or greater'); document.getElementById('slotValue').focus(); return; }
   if(S.tags.length===0){ addLog('ERROR','Add at least one patient email'); ti.focus(); return; }
   if(S.tags.length>MAX_TAGS){ addLog('ERROR','Max '+MAX_TAGS+' recipients'); return; }
   var sd=new Date(sv);
@@ -1561,7 +1589,13 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
   fetch(API+'/broadcast',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({slot_time:sd.toISOString(),clinician:cl||null,patient_emails:S.tags.slice()})
+    body:JSON.stringify({
+      slot_time:sd.toISOString(),
+      clinician:cl||null,
+      appointment_type:appt||null,
+      slot_value_pence:Math.round(slotValuePounds*100),
+      patient_emails:S.tags.slice()
+    })
   })
   .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
   .then(function(res){
@@ -1604,6 +1638,8 @@ function doReset(){
   S.broadcast=null; S.roster={}; S.tags=[];
   clearState();
   document.getElementById('clinician').value='';
+  document.getElementById('appointmentType').value='Check-up';
+  document.getElementById('slotValue').value='';
   prefillSlot(); renderTags(); unlockForm(); renderIdle();
   removeClass('rosterPanel', 'show');
   document.getElementById('rosterBody').innerHTML='';
