@@ -1359,6 +1359,16 @@ function doPoll(id){
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
     .then(function(data){
       setConn(true);
+      if(Array.isArray(data.offers)){
+        for(var i=0;i<data.offers.length;i++){
+          var offer=data.offers[i];
+          if(offer.patient_email&&offer.status){
+            var mapped=offer.status==='sent'?'pending':offer.status;
+            setRoster(offer.patient_email,mapped);
+          }
+        }
+        saveState();
+      }
       if(data.status==='locked'){
         stopPoll(); stopCd();
         S.stats.filled++; updateMetrics();
@@ -1372,7 +1382,7 @@ function doPoll(id){
         addLog('ACCEPT','Slot confirmed by '+(data.accepted_by||'patient'));
         saveState();
         unlockForm();
-      } else if(data.status==='all_declined'){
+      } else if(data.status==='all_declined'||data.status==='declined'){
         stopPoll(); stopCd();
         S.stats.expired++; updateMetrics();
         expireAll();

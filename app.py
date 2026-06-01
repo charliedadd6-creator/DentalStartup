@@ -135,6 +135,7 @@ class SlotStatusResponse(BaseModel):
     offers_sent: int
     accepted_by: str | None
     locked_at: datetime | None
+    offers: list[dict] = Field(default_factory=list)
 
 
 async def log_clinical_event(
@@ -1096,7 +1097,7 @@ async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str) -> asyncpg.Record:
     async with pool.acquire() as conn:
         slot = await conn.fetchrow(
             """
-            SELECT id::text, slot_time, clinician, status, accepted_by, locked_at
+            SELECT id::text, clinic_id::text, slot_time, clinician, status, accepted_by, locked_at
             FROM waitlist_slots
             WHERE id = $1
             """,
@@ -1110,24 +1111,66 @@ async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str) -> asyncpg.Record:
 async def build_broadcast_response(pool: asyncpg.Pool, slot_id: str) -> BroadcastResponse:
     slot = await get_slot_or_404(pool, slot_id)
     status = await build_slot_status_response(pool, slot)
-    return BroadcastResponse(**status.model_dump(exclude={"locked_at"}))
+    return BroadcastResponse(**status.model_dump(exclude={"locked_at", "offers"}))
 
 
 async def build_slot_status_response(pool: asyncpg.Pool, slot: asyncpg.Record) -> SlotStatusResponse:
+    slot_uuid = uuid.UUID(slot["id"])
+    clinic_uuid = uuid.UUID(str(slot["clinic_id"])) if slot["clinic_id"] else None
+
     async with pool.acquire() as conn:
-        offers_sent = await conn.fetchval(
-            "SELECT count(*) FROM waitlist_offers WHERE slot_id = $1",
-            uuid.UUID(slot["id"]),
-        )
+        if clinic_uuid:
+            offer_rows = await conn.fetch(
+                """
+                SELECT patient_email, status
+                FROM waitlist_offers
+                WHERE slot_id = $1 AND clinic_id = $2
+                ORDER BY created_at ASC
+                """,
+                slot_uuid,
+                clinic_uuid,
+            )
+        else:
+            offer_rows = await conn.fetch(
+                """
+                SELECT patient_email, status
+                FROM waitlist_offers
+                WHERE slot_id = $1
+                ORDER BY created_at ASC
+                """,
+                slot_uuid,
+            )
+
+        offers_sent = len(offer_rows)
+        has_offers = len(offer_rows) > 0
+        all_declined = has_offers and all(row["status"] == "declined" for row in offer_rows)
+        status = slot["status"]
+
+        if all_declined and status == "broadcasting":
+            await conn.execute(
+                """
+                UPDATE waitlist_slots
+                SET status = 'declined'
+                WHERE id = $1
+                """,
+                slot_uuid,
+            )
+            status = "declined"
+
+    offers = [
+        {"patient_email": row["patient_email"], "status": row["status"]}
+        for row in offer_rows
+    ]
 
     return SlotStatusResponse(
         slot_id=slot["id"],
         slot_time=slot["slot_time"],
         clinician=slot["clinician"],
-        status=slot["status"],
+        status=status,
         offers_sent=offers_sent,
         accepted_by=slot["accepted_by"],
         locked_at=slot["locked_at"],
+        offers=offers,
     )
 
 
