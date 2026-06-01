@@ -41,6 +41,21 @@ def require_auth(request: Request):
     return None
 
 
+def get_session_clinic_id(request: Request) -> str:
+    clinic_id = request.session.get("clinic_id")
+    if not clinic_id:
+        raise HTTPException(status_code=401, detail="Clinic session missing")
+    return clinic_id
+
+
+def iso_or_none(value):
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
 def generate_secure_token(offer_id: str) -> str:
     timestamp = int(time.time())
     payload = f"{offer_id}:{timestamp}".encode("utf-8")
@@ -329,6 +344,169 @@ async def broadcast(
         details={"offers_sent": len(offers), "clinician": request.clinician},
     )
     return await build_broadcast_response(http_request.app.state.pool, slot["id"])
+
+
+@app.get("/api/broadcasts")
+async def api_broadcasts(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                s.id::text AS id,
+                s.slot_time,
+                s.clinician,
+                s.status,
+                s.accepted_by,
+                s.created_at,
+                s.locked_at,
+                COUNT(o.id)::int AS offers_sent,
+                (COUNT(o.id) FILTER (WHERE o.status = 'accepted'))::int AS accepted_offers,
+                (COUNT(o.id) FILTER (WHERE o.status = 'declined'))::int AS declined_offers,
+                (COUNT(o.id) FILTER (WHERE o.status = 'expired'))::int AS expired_offers,
+                (COUNT(o.id) FILTER (WHERE o.status = 'sent'))::int AS pending_offers
+            FROM waitlist_slots s
+            LEFT JOIN waitlist_offers o
+            ON o.slot_id = s.id
+            AND o.clinic_id = s.clinic_id
+            WHERE s.clinic_id = $1
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
+            LIMIT 100;
+            """,
+            clinic_uuid,
+        )
+
+    return [
+        {
+            "id": row["id"],
+            "slot_time": iso_or_none(row["slot_time"]),
+            "clinician": row["clinician"],
+            "status": row["status"],
+            "accepted_by": row["accepted_by"],
+            "created_at": iso_or_none(row["created_at"]),
+            "locked_at": iso_or_none(row["locked_at"]),
+            "offers_sent": row["offers_sent"],
+            "accepted_offers": row["accepted_offers"],
+            "declined_offers": row["declined_offers"],
+            "expired_offers": row["expired_offers"],
+            "pending_offers": row["pending_offers"],
+        }
+        for row in rows
+    ]
+
+
+@app.get("/api/appointments/recovered")
+async def api_recovered_appointments(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                id::text AS id,
+                accepted_by AS patient,
+                slot_time,
+                clinician,
+                status,
+                locked_at AS confirmed_at
+            FROM waitlist_slots
+            WHERE clinic_id = $1
+              AND (status = 'locked' OR accepted_by IS NOT NULL)
+            ORDER BY locked_at DESC NULLS LAST, created_at DESC
+            LIMIT 100;
+            """,
+            clinic_uuid,
+        )
+
+    return [
+        {
+            "id": row["id"],
+            "patient": row["patient"],
+            "slot_time": iso_or_none(row["slot_time"]),
+            "clinician": row["clinician"],
+            "status": row["status"],
+            "confirmed_at": iso_or_none(row["confirmed_at"]),
+        }
+        for row in rows
+    ]
+
+
+@app.get("/api/analytics/summary")
+async def api_analytics_summary(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        slot_summary = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)::int AS total_broadcasts,
+                (COUNT(*) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL))::int AS slots_recovered
+            FROM waitlist_slots
+            WHERE clinic_id = $1;
+            """,
+            clinic_uuid,
+        )
+        offer_summary = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)::int AS offers_sent,
+                (COUNT(*) FILTER (WHERE status = 'accepted'))::int AS accepted_offers,
+                (COUNT(*) FILTER (WHERE status = 'declined'))::int AS declined_offers,
+                (COUNT(*) FILTER (WHERE status = 'expired'))::int AS expired_offers,
+                (COUNT(*) FILTER (WHERE status = 'sent'))::int AS pending_offers,
+                (AVG(EXTRACT(EPOCH FROM (accepted_at - created_at)) / 60)
+                    FILTER (WHERE status = 'accepted' AND accepted_at IS NOT NULL))::float AS avg_response_minutes
+            FROM waitlist_offers
+            WHERE clinic_id = $1;
+            """,
+            clinic_uuid,
+        )
+        top_rows = await conn.fetch(
+            """
+            SELECT COALESCE(NULLIF(clinician, ''), 'Unassigned') AS clinician,
+                   COUNT(*)::int AS recovered
+            FROM waitlist_slots
+            WHERE clinic_id = $1
+              AND (status = 'locked' OR accepted_by IS NOT NULL)
+            GROUP BY COALESCE(NULLIF(clinician, ''), 'Unassigned')
+            ORDER BY recovered DESC, clinician ASC
+            LIMIT 5;
+            """,
+            clinic_uuid,
+        )
+
+    total_broadcasts = slot_summary["total_broadcasts"] if slot_summary else 0
+    slots_recovered = slot_summary["slots_recovered"] if slot_summary else 0
+    recovery_rate = round((slots_recovered / total_broadcasts) * 100, 1) if total_broadcasts else 0.0
+    avg_response = offer_summary["avg_response_minutes"] if offer_summary else None
+
+    return {
+        "total_broadcasts": total_broadcasts,
+        "offers_sent": offer_summary["offers_sent"] if offer_summary else 0,
+        "slots_recovered": slots_recovered,
+        "recovery_rate": recovery_rate,
+        "accepted_offers": offer_summary["accepted_offers"] if offer_summary else 0,
+        "declined_offers": offer_summary["declined_offers"] if offer_summary else 0,
+        "expired_offers": offer_summary["expired_offers"] if offer_summary else 0,
+        "pending_offers": offer_summary["pending_offers"] if offer_summary else 0,
+        "avg_response_minutes": round(avg_response, 1) if avg_response is not None else None,
+        "top_clinicians": [
+            {"clinician": row["clinician"], "recovered": row["recovered"]}
+            for row in top_rows
+        ],
+        "total_revenue_saved": None,
+    }
 
 
 @app.get("/slot-status/{slot_id}", response_model=SlotStatusResponse)

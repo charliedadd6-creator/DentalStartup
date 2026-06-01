@@ -87,22 +87,22 @@
         <div class="metrics-row">
             <div class="metric-card">
                 <div class="metric-label">Today</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="appointmentsToday">0</div>
                 <div class="metric-sub">Appointments today</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">This Week</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="appointmentsWeek">0</div>
                 <div class="metric-sub">Scheduled this week</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Recovered</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="appointmentsRecovered">0</div>
                 <div class="metric-sub">Via SwiftSlot</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Cancelled</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="appointmentsCancelled">0</div>
                 <div class="metric-sub">This month</div>
             </div>
         </div>
@@ -123,7 +123,7 @@
                         <th>Confirmed At</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="appointmentRows">
                     <tr>
                         <td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">
                             No recovered appointments yet.
@@ -134,6 +134,67 @@
         </div>
     </div>
 </div>
+<script>
+(function () {
+  function byId(id){ return document.getElementById(id); }
+  function setText(id, value){ var el=byId(id); if(el) el.textContent=value; }
+  function fmtDate(value){
+    if(!value) return '—';
+    return new Date(value).toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  }
+  function esc(value){
+    return String(value == null || value === '' ? '—' : value)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function chip(status){
+    var cls=status==='locked'?'chip-green':'chip-gray';
+    return '<span class="chip '+cls+'">'+esc(status || 'confirmed')+'</span>';
+  }
+  function empty(message){
+    return '<tr><td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
+  }
+  function isToday(value){
+    if(!value) return false;
+    var d=new Date(value), n=new Date();
+    return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();
+  }
+  function isThisWeek(value){
+    if(!value) return false;
+    var d=new Date(value), n=new Date();
+    var start=new Date(n); start.setHours(0,0,0,0); start.setDate(n.getDate()-((n.getDay()+6)%7));
+    var end=new Date(start); end.setDate(start.getDate()+7);
+    return d>=start&&d<end;
+  }
+
+  fetch('/api/appointments/recovered')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(rows){
+      var appointments=Array.isArray(rows)?rows:[];
+      setText('appointmentsToday', appointments.filter(function(row){ return isToday(row.slot_time); }).length);
+      setText('appointmentsWeek', appointments.filter(function(row){ return isThisWeek(row.slot_time); }).length);
+      setText('appointmentsRecovered', appointments.length);
+      setText('appointmentsCancelled', 0);
+
+      var body=byId('appointmentRows');
+      if(!body) return;
+      if(!appointments.length){ body.innerHTML=empty('No recovered appointments yet.'); return; }
+      body.innerHTML=appointments.map(function(row){
+        return '<tr>'+
+          '<td>'+esc(row.patient)+'</td>'+
+          '<td>'+esc(fmtDate(row.slot_time))+'</td>'+
+          '<td>'+esc(row.clinician)+'</td>'+
+          '<td>'+chip(row.status)+'</td>'+
+          '<td>'+esc(fmtDate(row.confirmed_at))+'</td>'+
+        '</tr>';
+      }).join('');
+    })
+    .catch(function(){
+      var body=byId('appointmentRows');
+      if(body) body.innerHTML=empty('Could not load recovered appointments.');
+    });
+})();
+</script>
 <script>
 (function () {
   var path = window.location.pathname;

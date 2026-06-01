@@ -85,22 +85,22 @@
         <div class="metrics-row">
             <div class="metric-card">
                 <div class="metric-label">Recovery Rate</div>
-                <div class="metric-value">—</div>
+                <div class="metric-value" id="analyticsRecoveryRate">—</div>
                 <div class="metric-sub">All time</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Avg Response Time</div>
-                <div class="metric-value">—</div>
+                <div class="metric-value" id="analyticsAvgResponse">—</div>
                 <div class="metric-sub">Minutes to accept</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Total Revenue Saved</div>
-                <div class="metric-value">—</div>
-                <div class="metric-sub">Estimated</div>
+                <div class="metric-value" id="analyticsRevenue">—</div>
+                <div class="metric-sub">Add slot values to estimate recovered revenue.</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Offers Accepted</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="analyticsAcceptedOffers">0</div>
                 <div class="metric-sub">All time</div>
             </div>
         </div>
@@ -113,19 +113,19 @@
                 <div class="panel-body">
                     <div class="stat-row">
                         <span class="stat-label">Accepted</span>
-                        <span class="stat-value">0</span>
+                        <span class="stat-value" id="breakdownAccepted">0</span>
                     </div>
                     <div class="stat-row">
                         <span class="stat-label">Declined</span>
-                        <span class="stat-value">0</span>
+                        <span class="stat-value" id="breakdownDeclined">0</span>
                     </div>
                     <div class="stat-row">
                         <span class="stat-label">Expired</span>
-                        <span class="stat-value">0</span>
+                        <span class="stat-value" id="breakdownExpired">0</span>
                     </div>
                     <div class="stat-row">
                         <span class="stat-label">Pending</span>
-                        <span class="stat-value">0</span>
+                        <span class="stat-value" id="breakdownPending">0</span>
                     </div>
                 </div>
             </div>
@@ -134,7 +134,7 @@
                     <div class="panel-head-title">Top Clinicians</div>
                     <div class="panel-head-sub">By slots recovered</div>
                 </div>
-                <div class="empty-state">
+                <div class="empty-state" id="topClinicians">
                     <h3>No data yet</h3>
                     <p>Data will appear after your first broadcast.</p>
                 </div>
@@ -142,6 +142,49 @@
         </div>
     </div>
 </div>
+<script>
+(function () {
+  function byId(id){ return document.getElementById(id); }
+  function setText(id, value){ var el=byId(id); if(el) el.textContent=value; }
+  function esc(value){
+    return String(value == null || value === '' ? '—' : value)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  fetch('/api/analytics/summary')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      setText('analyticsRecoveryRate', (data.recovery_rate || 0).toFixed ? data.recovery_rate.toFixed(1)+'%' : data.recovery_rate+'%');
+      setText('analyticsAvgResponse', data.avg_response_minutes == null ? '—' : data.avg_response_minutes+'m');
+      setText('analyticsRevenue', '—');
+      setText('analyticsAcceptedOffers', data.accepted_offers || 0);
+      setText('breakdownAccepted', data.accepted_offers || 0);
+      setText('breakdownDeclined', data.declined_offers || 0);
+      setText('breakdownExpired', data.expired_offers || 0);
+      setText('breakdownPending', data.pending_offers || 0);
+
+      var top=byId('topClinicians');
+      if(!top) return;
+      var clinicians=Array.isArray(data.top_clinicians)?data.top_clinicians:[];
+      if(!clinicians.length){
+        top.innerHTML='<h3>No data yet</h3><p>Data will appear after your first broadcast.</p>';
+        return;
+      }
+      top.className='panel-body';
+      top.innerHTML=clinicians.map(function(row){
+        return '<div class="stat-row">'+
+          '<span class="stat-label">'+esc(row.clinician)+'</span>'+
+          '<span class="stat-value">'+esc(row.recovered)+' recovered</span>'+
+        '</div>';
+      }).join('');
+    })
+    .catch(function(){
+      var top=byId('topClinicians');
+      if(top) top.innerHTML='<h3>Could not load analytics.</h3><p>Please refresh and try again.</p>';
+    });
+})();
+</script>
 <script>
 (function () {
   var path = window.location.pathname;

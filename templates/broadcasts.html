@@ -84,28 +84,28 @@
             <div class="topbar-title">Broadcast History</div>
             <div class="topbar-sub">All slot recovery broadcasts sent to patients</div>
         </div>
-        <a href="/dashboard" class="new-btn">+ New Broadcast</a>
+        <a href="/app/dashboard" class="new-btn">+ New Broadcast</a>
     </div>
     <div class="content">
         <div class="metrics-row">
             <div class="metric-card">
                 <div class="metric-label">Total Broadcasts</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="totalBroadcasts">0</div>
                 <div class="metric-sub">All time</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Slots Recovered</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="slotsRecovered">0</div>
                 <div class="metric-sub">Successfully filled</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Recovery Rate</div>
-                <div class="metric-value">—</div>
+                <div class="metric-value" id="recoveryRate">—</div>
                 <div class="metric-sub">Acceptance rate</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Offers Sent</div>
-                <div class="metric-value">0</div>
+                <div class="metric-value" id="offersSent">0</div>
                 <div class="metric-sub">Total emails</div>
             </div>
         </div>
@@ -127,7 +127,7 @@
                         <th>Broadcast Time</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="broadcastRows">
                     <tr>
                         <td colspan="6" style="text-align:center; padding:48px; color:#94a3b8;">
                             No broadcasts yet. Start one from the Dashboard.
@@ -138,6 +138,58 @@
         </div>
     </div>
 </div>
+<script>
+(function () {
+  function byId(id){ return document.getElementById(id); }
+  function setText(id, value){ var el=byId(id); if(el) el.textContent=value; }
+  function fmtDate(value){
+    if(!value) return '—';
+    return new Date(value).toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  }
+  function esc(value){
+    return String(value == null || value === '' ? '—' : value)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function chip(status){
+    var cls=status==='locked'?'chip-green':status==='broadcasting'?'chip-blue':status==='declined'?'chip-amber':'chip-gray';
+    return '<span class="chip '+cls+'">'+esc(status || 'unknown')+'</span>';
+  }
+  function empty(message){
+    return '<tr><td colspan="6" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
+  }
+
+  fetch('/api/broadcasts')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(rows){
+      var broadcasts=Array.isArray(rows)?rows:[];
+      var recovered=broadcasts.filter(function(row){ return row.status==='locked'||row.accepted_by; }).length;
+      var offers=broadcasts.reduce(function(sum,row){ return sum+(row.offers_sent||0); },0);
+      setText('totalBroadcasts', broadcasts.length);
+      setText('slotsRecovered', recovered);
+      setText('recoveryRate', broadcasts.length ? Math.round((recovered/broadcasts.length)*100)+'%' : '—');
+      setText('offersSent', offers);
+
+      var body=byId('broadcastRows');
+      if(!body) return;
+      if(!broadcasts.length){ body.innerHTML=empty('No broadcasts yet. Start one from the Dashboard.'); return; }
+      body.innerHTML=broadcasts.map(function(row){
+        return '<tr>'+
+          '<td>'+esc(fmtDate(row.slot_time))+'</td>'+
+          '<td>'+esc(row.clinician)+'</td>'+
+          '<td>'+esc(row.offers_sent)+'</td>'+
+          '<td>'+chip(row.status)+'</td>'+
+          '<td>'+esc(row.accepted_by)+'</td>'+
+          '<td>'+esc(fmtDate(row.created_at))+'</td>'+
+        '</tr>';
+      }).join('');
+    })
+    .catch(function(){
+      var body=byId('broadcastRows');
+      if(body) body.innerHTML=empty('Could not load broadcasts.');
+    });
+})();
+</script>
 <script>
 (function () {
   var path = window.location.pathname;
