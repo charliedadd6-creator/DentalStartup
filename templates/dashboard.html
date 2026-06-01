@@ -677,7 +677,7 @@ Logout
     <div class="deg-banner" id="degBanner">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span id="degMsg">Database connection degraded.</span>
-      <button class="deg-banner-close" onclick="document.getElementById('degBanner').classList.remove('show')">×</button>
+      <button class="deg-banner-close" onclick="var el=document.getElementById('degBanner');if(el)el.classList.remove('show')">×</button>
     </div>
 
     <!-- PAGE HEADER -->
@@ -911,7 +911,77 @@ var S = {
   stats: { broadcasts:0, filled:0, offers:0, expired:0 }
 };
 
+var STATE_KEY = 'swiftslot_dashboard_state_v1';
+
+function saveState() {
+  try {
+    localStorage.setItem(STATE_KEY, JSON.stringify({
+      stats: S.stats,
+      broadcast: S.broadcast ? {
+        slotId: S.broadcast.slotId,
+        slotTime: S.broadcast.slotTime ? S.broadcast.slotTime.toISOString() : null,
+        clinician: S.broadcast.clinician,
+        sentAt: S.broadcast.sentAt ? S.broadcast.sentAt.toISOString() : null,
+        emails: S.broadcast.emails || []
+      } : null,
+      roster: S.roster,
+      tags: S.tags
+    }));
+  } catch (e) {
+    console.warn('Could not save dashboard state', e);
+  }
+}
+
+function loadState() {
+  try {
+    var raw = localStorage.getItem(STATE_KEY);
+    if (!raw) return;
+    var data = JSON.parse(raw);
+
+    if (data.stats) S.stats = data.stats;
+    if (data.roster) S.roster = data.roster;
+    if (Array.isArray(data.tags)) S.tags = data.tags;
+
+    if (data.broadcast) {
+      S.broadcast = {
+        slotId: data.broadcast.slotId,
+        slotTime: data.broadcast.slotTime ? new Date(data.broadcast.slotTime) : null,
+        clinician: data.broadcast.clinician,
+        sentAt: data.broadcast.sentAt ? new Date(data.broadcast.sentAt) : null,
+        emails: data.broadcast.emails || []
+      };
+    }
+  } catch (e) {
+    console.warn('Could not load dashboard state', e);
+  }
+}
+
+function clearState() {
+  try {
+    localStorage.removeItem(STATE_KEY);
+  } catch (e) {}
+}
+
 /* ─── UTILITIES ──────────────────────────── */
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, value) {
+  var el = byId(id);
+  if (el) el.textContent = value;
+}
+
+function addClass(id, className) {
+  var el = byId(id);
+  if (el) el.classList.add(className);
+}
+
+function removeClass(id, className) {
+  var el = byId(id);
+  if (el) el.classList.remove(className);
+}
+
 function pad2(n){ return ('0'+n).slice(-2); }
 function nowTime(){
   var d=new Date();
@@ -945,14 +1015,14 @@ window.location.href = '/login-page';
 /* ─── CLOCK & DATE ───────────────────────── */
 function tick(){
   var d=new Date();
-  document.getElementById('clockEl').textContent=pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+  setText('clockEl', pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds()));
 }
 setInterval(tick,1000); tick();
 
 (function setDate(){
   var d=new Date();
   var opts={weekday:'long',day:'numeric',month:'long',year:'numeric'};
-  document.getElementById('topbarDate').textContent=d.toLocaleDateString('en-GB',opts);
+  setText('topbarDate', d.toLocaleDateString('en-GB',opts));
 })();
 
 /* ─── PRACTICE NAME ──────────────────────── */
@@ -961,14 +1031,14 @@ pi.value=localStorage.getItem('ss_prac')||'';
 pi.addEventListener('input',function(){
   localStorage.setItem('ss_prac',this.value);
   var initials=(this.value||'R').trim().charAt(0).toUpperCase();
-  document.getElementById('userAvatar').textContent=initials;
-  document.getElementById('userName').textContent=this.value||'Receptionist';
+  setText('userAvatar', initials);
+  setText('userName', this.value||'Receptionist');
 });
 // Init avatar
 (function(){
   var v=pi.value||'';
-  document.getElementById('userAvatar').textContent=v?v.trim().charAt(0).toUpperCase():'R';
-  document.getElementById('userName').textContent=v||'Receptionist';
+  setText('userAvatar', v?v.trim().charAt(0).toUpperCase():'R');
+  setText('userName', v||'Receptionist');
 })();
 
 /* ─── PREFILL SLOT TIME ──────────────────── */
@@ -984,36 +1054,37 @@ prefillSlot();
 function setConn(ok){
   S.connected=ok;
   var dot1=document.getElementById('topConnDot');
-  var lbl1=document.getElementById('topConnLabel');
   var pip=document.getElementById('sidebarPip');
   if(ok){
-    dot1.className='topbar-conn-dot';
-    lbl1.textContent='Connected';
-    pip.className='conn-pip';
+    if(dot1) dot1.className='topbar-conn-dot';
+    setText('topConnLabel', 'Connected');
+    if(pip) pip.className='conn-pip';
   } else {
-    dot1.className='topbar-conn-dot warn';
-    lbl1.textContent='Reconnecting...';
-    pip.className='conn-pip warn';
+    if(dot1) dot1.className='topbar-conn-dot warn';
+    setText('topConnLabel', 'Reconnecting...');
+    if(pip) pip.className='conn-pip warn';
   }
 }
 
 /* ─── METRICS ────────────────────────────── */
 function updateMetrics(){
-  document.getElementById('metricBroadcasts').textContent=S.stats.broadcasts;
-  document.getElementById('metricFilled').textContent=S.stats.filled;
-  document.getElementById('metricOffers').textContent=S.stats.offers;
-  document.getElementById('metricExpired').textContent=S.stats.expired;
+  setText('metricBroadcasts', S.stats.broadcasts);
+  setText('metricFilled', S.stats.filled);
+  setText('metricOffers', S.stats.offers);
+  setText('metricExpired', S.stats.expired);
+  setText('deltaBroadcasts', 'Session');
   var total=S.stats.broadcasts;
   var rate=total>0?Math.round((S.stats.filled/total)*100)+'%':'—';
-  document.getElementById('metricRate').textContent=rate;
+  setText('metricRate', rate);
+  setText('deltaRate', 'This session');
   // Delta colours
   var deltaF=document.getElementById('deltaFilled');
   if(S.stats.filled>0){
-    deltaF.className='metric-delta delta-up';
-    deltaF.textContent='+'+S.stats.filled+' recovered';
+    if(deltaF) deltaF.className='metric-delta delta-up';
+    setText('deltaFilled', '+'+S.stats.filled+' recovered');
   }
   // Waitlist badge
-  document.getElementById('waitlistBadge').textContent=S.tags.length;
+  setText('waitlistBadge', S.tags.length);
 }
 
 /* ─── ACTIVITY LOG ───────────────────────── */
@@ -1220,7 +1291,8 @@ function initRoster(emails){
   S.roster={};
   for(var i=0;i<emails.length;i++) S.roster[emails[i]]='pending';
   renderRoster();
-  document.getElementById('rosterPanel').classList.add('show');
+  addClass('rosterPanel', 'show');
+  saveState();
 }
 
 function renderRoster(){
@@ -1263,6 +1335,7 @@ function renderRoster(){
 function setRoster(email,status){
   if(Object.prototype.hasOwnProperty.call(S.roster,email)){
     S.roster[email]=status; renderRoster();
+    saveState();
   }
 }
 function expireAll(){
@@ -1271,6 +1344,7 @@ function expireAll(){
     if(S.roster[emails[i]]==='pending') S.roster[emails[i]]='expired';
   }
   renderRoster();
+  saveState();
 }
 
 /* ─── POLLING ────────────────────────────── */
@@ -1296,6 +1370,7 @@ function doPoll(id){
         }
         renderLocked(data);
         addLog('ACCEPT','Slot confirmed by '+(data.accepted_by||'patient'));
+        saveState();
         unlockForm();
       } else if(data.status==='all_declined'){
         stopPoll(); stopCd();
@@ -1303,6 +1378,7 @@ function doPoll(id){
         expireAll();
         renderDeclined();
         addLog('DECLINE','All patients declined');
+        saveState();
         unlockForm();
       } else if(data.status==='expired'){
         stopPoll(); stopCd();
@@ -1310,6 +1386,7 @@ function doPoll(id){
         expireAll();
         renderExpired();
         addLog('EXPIRE','Offer window expired');
+        saveState();
         unlockForm();
       }
     })
@@ -1323,6 +1400,7 @@ function onExpired(){
   stopPoll(); S.stats.expired++; updateMetrics();
   expireAll(); renderExpired();
   addLog('EXPIRE','Offer window closed');
+  saveState();
   unlockForm();
 }
 
@@ -1356,7 +1434,7 @@ function updateTagUI(){
   c.className='r-count'+(n>MAX_TAGS?' over':'');
   var cl=document.getElementById('rClearBtn');
   cl.className='r-clear'+(n>0?'':' hidden');
-  document.getElementById('waitlistBadge').textContent=n;
+  setText('waitlistBadge', n);
   updateResetBtn();
 }
 
@@ -1368,11 +1446,13 @@ function addTag(raw){
   if(S.tags.length>=MAX_TAGS){ addLog('ERROR','Max '+MAX_TAGS+' recipients'); return; }
   S.tags.push(email);
   renderTags();
+  saveState();
 }
 
 function removeTag(email){
   S.tags=S.tags.filter(function(t){ return t!==email; });
   renderTags();
+  saveState();
 }
 
 function shakeInput(){
@@ -1386,7 +1466,7 @@ function shakeInput(){
   },50);
 }
 
-document.getElementById('rClearBtn').addEventListener('click',function(){ S.tags=[]; renderTags(); });
+document.getElementById('rClearBtn').addEventListener('click',function(){ S.tags=[]; renderTags(); saveState(); });
 document.getElementById('tagArea').addEventListener('click',function(){ document.getElementById('tagInput').focus(); });
 
 var ti=document.getElementById('tagInput');
@@ -1425,10 +1505,10 @@ function lockForm(){
   document.getElementById('slotTime').disabled=true;
   document.getElementById('clinician').disabled=true;
   document.getElementById('tagInput').disabled=true;
-  document.getElementById('tagArea').classList.add('locked');
+  addClass('tagArea', 'locked');
   var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
   for(var i=0;i<xs.length;i++) xs[i].disabled=true;
-  document.getElementById('lockBar').classList.add('show');
+  addClass('lockBar', 'show');
   document.getElementById('resetBtn').className='btn-ghost';
 }
 
@@ -1436,13 +1516,13 @@ function unlockForm(){
   document.getElementById('slotTime').disabled=false;
   document.getElementById('clinician').disabled=false;
   document.getElementById('tagInput').disabled=false;
-  document.getElementById('tagArea').classList.remove('locked');
+  removeClass('tagArea', 'locked');
   var xs=document.getElementById('tagArea').querySelectorAll('.e-tag-x');
   for(var i=0;i<xs.length;i++) xs[i].disabled=false;
-  document.getElementById('lockBar').classList.remove('show');
+  removeClass('lockBar', 'show');
   var btn=document.getElementById('broadcastBtn');
   btn.disabled=false; btn.className='btn-primary';
-  document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+  setText('btnLabel', 'Send Offers to Waitlist');
   var ic=btn.querySelector('svg');
   if(ic) ic.style.display='';
   var sp=btn.querySelector('.spin');
@@ -1466,7 +1546,7 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
   if(ic) ic.style.display='none';
   var sp=document.createElement('span');
   sp.className='spin'; btn.insertBefore(sp,btn.querySelector('#btnLabel'));
-  document.getElementById('btnLabel').textContent='Sending...';
+  setText('btnLabel', 'Sending...');
 
   fetch(API+'/broadcast',{
     method:'POST',
@@ -1479,14 +1559,14 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     if(!res.ok){
       btn.disabled=false;
       var ico=btn.querySelector('#btnIcon'); if(ico) ico.style.display='';
-      document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+      setText('btnLabel', 'Send Offers to Waitlist');
       addLog('ERROR',res.data.detail||'Broadcast failed');
       setConn(false); return;
     }
     // Success
     btn.className='btn-primary success';
     var ico2=btn.querySelector('#btnIcon'); if(ico2) ico2.style.display='';
-    document.getElementById('btnLabel').textContent='Offers Sent!';
+    setText('btnLabel', 'Offers Sent!');
     S.broadcast={slotId:res.data.slot_id,slotTime:sd,clinician:cl||null,sentAt:new Date(),emails:S.tags.slice()};
     S.stats.broadcasts++;
     S.stats.offers+=res.data.offers_sent;
@@ -1497,12 +1577,13 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     startPoll(res.data.slot_id);
     addLog('SEND','Sent '+res.data.offers_sent+' offer'+(res.data.offers_sent!==1?'s':'')+' — '+fmtSlot(sd));
     setConn(true);
+    saveState();
   })
   .catch(function(err){
     var spp=btn.querySelector('.spin'); if(spp) btn.removeChild(spp);
     btn.disabled=false; btn.className='btn-primary';
     var ico=btn.querySelector('#btnIcon'); if(ico) ico.style.display='';
-    document.getElementById('btnLabel').textContent='Send Offers to Waitlist';
+    setText('btnLabel', 'Send Offers to Waitlist');
     addLog('ERROR',err.message); setConn(false);
   });
 });
@@ -1511,9 +1592,10 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
 function doReset(){
   stopPoll(); stopCd();
   S.broadcast=null; S.roster={}; S.tags=[];
+  clearState();
   document.getElementById('clinician').value='';
   prefillSlot(); renderTags(); unlockForm(); renderIdle();
-  document.getElementById('rosterPanel').classList.remove('show');
+  removeClass('rosterPanel', 'show');
   document.getElementById('rosterBody').innerHTML='';
   updateResetBtn(); updateMetrics();
 }
@@ -1522,11 +1604,12 @@ function doRebroadcast(){
   stopPoll(); stopCd();
   S.broadcast=null; S.roster={}; S.tags=[];
   renderTags(); unlockForm(); renderIdle();
-  document.getElementById('rosterPanel').classList.remove('show');
+  removeClass('rosterPanel', 'show');
   document.getElementById('rosterBody').innerHTML='';
   ti.focus();
   addLog('INFO','Form reset — slot details retained');
   updateResetBtn(); updateMetrics();
+  saveState();
 }
 
 document.getElementById('resetBtn').addEventListener('click',doReset);
@@ -1541,22 +1624,31 @@ function healthCheck(){
         setConn(true);
       } else {
         addLog('ERROR','System degraded · '+d.database);
-        document.getElementById('degMsg').textContent='Database degraded: '+d.database+'. Broadcasts may fail.';
-        document.getElementById('degBanner').classList.add('show');
+        setText('degMsg', 'Database degraded: '+d.database+'. Broadcasts may fail.');
+        addClass('degBanner', 'show');
         setConn(false);
       }
     })
     .catch(function(){
       addLog('ERROR','Cannot reach backend at '+API);
-      document.getElementById('degMsg').textContent='Cannot reach SwiftSlot backend. Check your network.';
-      document.getElementById('degBanner').classList.add('show');
+      setText('degMsg', 'Cannot reach SwiftSlot backend. Check your network.');
+      addClass('degBanner', 'show');
       setConn(false);
     });
 }
 
 /* ─── INIT ───────────────────────────────── */
-renderIdle();
-updateMetrics();
+loadState();
+if(S.broadcast){
+  renderBroadcasting();
+  renderRoster();
+  addClass('rosterPanel', 'show');
+  updateMetrics();
+  startPoll(S.broadcast.slotId);
+} else {
+  renderIdle();
+  updateMetrics();
+}
 healthCheck();
 
 })();

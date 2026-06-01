@@ -1140,27 +1140,39 @@ async def notify_slot_update(pool: asyncpg.Pool, slot_id: uuid.UUID) -> None:
 
 
 async def send_waitlist_offer_emails(slot: asyncpg.Record, offers: list[asyncpg.Record]) -> None:
-    if not resend.api_key:
-        logger.info("RESEND_API_KEY is not set; skipping %s outbound waitlist emails.", len(offers))
+    api_key = (resend.api_key or "").strip()
+    if not api_key or api_key == "re_your_key_here":
+        logger.error("Resend is not configured; skipping %s outbound waitlist emails.", len(offers))
         return
 
     await asyncio.gather(*(send_offer_email_to_patient(slot, offer) for offer in offers))
 
 
 async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Record) -> None:
+    api_key = (resend.api_key or "").strip()
+    recipient = str(offer["patient_email"])
+    if not api_key or api_key == "re_your_key_here":
+        logger.error("Resend is not configured; skipping outbound waitlist email to %s.", recipient)
+        return
+
+    from_email = os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
+
     async with SMTP_SEMAPHORE:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: resend.Emails.send(
-                {
-                    "from": "SwiftSlot <onboarding@resend.dev>",
-                    "to": str(offer["patient_email"]),
-                    "subject": "Urgent Appointment Available at Smile Dental!",
-                    "html": build_offer_email_html(slot, offer),
-                }
-            ),
-        )
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: resend.Emails.send(
+                    {
+                        "from": from_email,
+                        "to": recipient,
+                        "subject": "Urgent Appointment Available at Smile Dental!",
+                        "html": build_offer_email_html(slot, offer),
+                    }
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to send waitlist offer email to %s", recipient)
 
 
 def build_offer_email_html(slot: asyncpg.Record, offer: asyncpg.Record) -> str:
