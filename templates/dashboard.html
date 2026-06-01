@@ -346,6 +346,43 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--gray-100);color:v
 .tag-real::placeholder{color:var(--gray-300)}
 .tag-real:disabled{cursor:not-allowed}
 .r-hint{font-size:10px;color:var(--gray-300);margin-top:5px}
+.waitlist-picker{
+  margin-top:12px;
+  border:1px solid var(--gray-200);
+  background:var(--gray-50);
+  border-radius:10px;
+  padding:10px;
+}
+.picker-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.picker-title{font-size:11px;font-weight:700;color:var(--gray-700)}
+.picker-add-all{
+  border:1px solid var(--gray-200);
+  background:var(--white);
+  color:var(--navy-500);
+  border-radius:7px;
+  padding:5px 8px;
+  font-family:'Inter',sans-serif;
+  font-size:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.picker-add-all:hover{background:var(--blue-50)}
+.picker-list{display:flex;flex-wrap:wrap;gap:7px}
+.patient-chip{
+  border:1px solid var(--gray-200);
+  background:var(--white);
+  color:var(--gray-700);
+  border-radius:8px;
+  padding:7px 9px;
+  cursor:pointer;
+  text-align:left;
+  max-width:100%;
+  font-family:'Inter',sans-serif;
+}
+.patient-chip:hover{border-color:var(--navy-500);background:var(--blue-50)}
+.patient-chip-name{display:block;font-size:11px;font-weight:700;color:var(--gray-800);line-height:1.2}
+.patient-chip-email{display:block;font-size:10px;color:var(--gray-400);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}
+.picker-empty{font-size:11px;color:var(--gray-400);line-height:1.5}
 
 /* GDPR */
 .gdpr{
@@ -825,6 +862,15 @@ Logout
             <input class="tag-real" id="tagInput" type="text" placeholder="patient@example.com" autocomplete="off" autocapitalize="none" spellcheck="false">
           </div>
           <div class="r-hint">Invalid addresses rejected automatically · Max 10 patients per broadcast</div>
+          <div class="waitlist-picker">
+            <div class="picker-head">
+              <div class="picker-title">Select from waitlist</div>
+              <button class="picker-add-all" type="button" id="addAllConsentedBtn">Add all consented</button>
+            </div>
+            <div class="picker-list" id="waitlistPicker">
+              <div class="picker-empty">Loading consented patients...</div>
+            </div>
+          </div>
         </div>
 
         <!-- STEP 3 -->
@@ -931,6 +977,7 @@ var S = {
 };
 
 var STATE_KEY = 'swiftslot_dashboard_state_v1';
+var waitlistPatients = [];
 
 function saveState() {
   try {
@@ -940,6 +987,7 @@ function saveState() {
         slotId: S.broadcast.slotId,
         slotTime: S.broadcast.slotTime ? S.broadcast.slotTime.toISOString() : null,
         clinician: S.broadcast.clinician,
+        status: S.broadcast.status || null,
         sentAt: S.broadcast.sentAt ? S.broadcast.sentAt.toISOString() : null,
         emails: S.broadcast.emails || []
       } : null,
@@ -966,6 +1014,7 @@ function loadState() {
         slotId: data.broadcast.slotId,
         slotTime: data.broadcast.slotTime ? new Date(data.broadcast.slotTime) : null,
         clinician: data.broadcast.clinician,
+        status: data.broadcast.status || null,
         sentAt: data.broadcast.sentAt ? new Date(data.broadcast.sentAt) : null,
         emails: data.broadcast.emails || []
       };
@@ -1020,6 +1069,12 @@ function fmtLocked(iso){
   return new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 function isEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
+
+function clampRate(value){
+  var n=Number(value);
+  if(!isFinite(n)) return 0;
+  return Math.max(0,Math.min(100,n));
+}
 
 function handleLogout() {
 fetch('/logout', { method: 'POST' })
@@ -1093,7 +1148,7 @@ function updateMetrics(){
   setText('metricExpired', S.stats.expired);
   setText('deltaBroadcasts', 'Session');
   var total=S.stats.broadcasts;
-  var rate=total>0?Math.round((S.stats.filled/total)*100)+'%':'—';
+  var rate=total>0?Math.round(clampRate((S.stats.filled/total)*100))+'%':'—';
   setText('metricRate', rate);
   setText('deltaRate', 'This session');
   // Delta colours
@@ -1104,6 +1159,43 @@ function updateMetrics(){
   }
   // Waitlist badge
   setText('waitlistBadge', S.tags.length);
+}
+
+function loadDashboardMetrics(){
+  return fetch(API+'/api/analytics/summary')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      var total=Number(data.total_broadcasts||0);
+      var filled=Number(data.slots_recovered||0);
+      var offers=Number(data.offers_sent||0);
+      var expired=Number(data.declined_offers||0)+Number(data.expired_offers||0);
+      var rate=clampRate(data.recovery_rate||0);
+
+      S.stats.broadcasts=total;
+      S.stats.filled=filled;
+      S.stats.offers=offers;
+      S.stats.expired=expired;
+
+      setText('metricBroadcasts', total);
+      setText('metricFilled', filled);
+      setText('metricOffers', offers);
+      setText('metricExpired', expired);
+      setText('metricRate', rate.toFixed(rate%1===0?0:1)+'%');
+      setText('deltaBroadcasts', 'Clinic total');
+      setText('deltaRate', 'Clinic total');
+      setText('waitlistBadge', S.tags.length);
+
+      var deltaF=document.getElementById('deltaFilled');
+      if(deltaF){
+        deltaF.className=filled>0?'metric-delta delta-up':'metric-delta';
+        setText('deltaFilled', filled>0?filled+' recovered':'No recovered slots yet');
+      }
+      saveState();
+    })
+    .catch(function(err){
+      console.warn('Could not load dashboard metrics; using local state fallback', err);
+      updateMetrics();
+    });
 }
 
 /* ─── ACTIVITY LOG ───────────────────────── */
@@ -1390,7 +1482,8 @@ function doPoll(id){
       }
       if(data.status==='locked'){
         stopPoll(); stopCd();
-        S.stats.filled++; updateMetrics();
+        S.stats.filled++;
+        if(S.broadcast) S.broadcast.status='locked';
         if(data.accepted_by){
           setRoster(data.accepted_by,'accepted');
           expireAll();
@@ -1400,22 +1493,27 @@ function doPoll(id){
         renderLocked(data);
         addLog('ACCEPT','Slot confirmed by '+(data.accepted_by||'patient'));
         saveState();
+        loadDashboardMetrics();
         unlockForm();
       } else if(data.status==='all_declined'||data.status==='declined'){
         stopPoll(); stopCd();
-        S.stats.expired++; updateMetrics();
+        S.stats.expired++;
+        if(S.broadcast) S.broadcast.status='declined';
         expireAll();
         renderDeclined();
         addLog('DECLINE','All patients declined');
         saveState();
+        loadDashboardMetrics();
         unlockForm();
       } else if(data.status==='expired'){
         stopPoll(); stopCd();
-        S.stats.expired++; updateMetrics();
+        S.stats.expired++;
+        if(S.broadcast) S.broadcast.status='expired';
         expireAll();
         renderExpired();
         addLog('EXPIRE','Offer window expired');
         saveState();
+        loadDashboardMetrics();
         unlockForm();
       }
     })
@@ -1426,11 +1524,83 @@ function doPoll(id){
 }
 
 function onExpired(){
-  stopPoll(); S.stats.expired++; updateMetrics();
+  stopPoll(); S.stats.expired++;
+  if(S.broadcast) S.broadcast.status='expired';
   expireAll(); renderExpired();
   addLog('EXPIRE','Offer window closed');
   saveState();
+  loadDashboardMetrics();
   unlockForm();
+}
+
+/* ─── WAITLIST PATIENT PICKER ────────────── */
+function patientDisplayName(patient){
+  return [patient.first_name,patient.last_name].filter(Boolean).join(' ').trim();
+}
+
+function renderWaitlistPicker(){
+  var list=document.getElementById('waitlistPicker');
+  if(!list) return;
+  list.innerHTML='';
+  if(waitlistPatients.length===0){
+    var empty=document.createElement('div');
+    empty.className='picker-empty';
+    empty.textContent='No consented patients yet. Add patients from the Waitlist page.';
+    list.appendChild(empty);
+    return;
+  }
+  for(var i=0;i<waitlistPatients.length;i++){
+    (function(patient){
+      var email=(patient.email||'').toLowerCase().trim();
+      if(!email) return;
+      var chip=document.createElement('button');
+      chip.type='button';
+      chip.className='patient-chip';
+      chip.setAttribute('data-email',email);
+
+      var name=document.createElement('span');
+      name.className='patient-chip-name';
+      name.textContent=patientDisplayName(patient)||email;
+
+      var emailEl=document.createElement('span');
+      emailEl.className='patient-chip-email';
+      emailEl.textContent=email;
+
+      chip.appendChild(name);
+      chip.appendChild(emailEl);
+      chip.addEventListener('click',function(){
+        addTag(email);
+        saveState();
+      });
+      list.appendChild(chip);
+    })(waitlistPatients[i]);
+  }
+}
+
+function loadWaitlistPatients(){
+  return fetch(API+'/api/patients')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      var patients=Array.isArray(data.patients)?data.patients:[];
+      waitlistPatients=patients.filter(function(patient){
+        return patient.consent_status==='consented';
+      });
+      renderWaitlistPicker();
+    })
+    .catch(function(err){
+      console.warn('Could not load waitlist patients', err);
+      waitlistPatients=[];
+      renderWaitlistPicker();
+    });
+}
+
+function addAllConsented(){
+  for(var i=0;i<waitlistPatients.length;i++){
+    if(S.tags.length>=MAX_TAGS) break;
+    if(waitlistPatients[i].email) addTag(waitlistPatients[i].email);
+  }
+  renderTags();
+  saveState();
 }
 
 /* ─── TAG INPUT ──────────────────────────── */
@@ -1497,6 +1667,7 @@ function shakeInput(){
 
 document.getElementById('rClearBtn').addEventListener('click',function(){ S.tags=[]; renderTags(); saveState(); });
 document.getElementById('tagArea').addEventListener('click',function(){ document.getElementById('tagInput').focus(); });
+document.getElementById('addAllConsentedBtn').addEventListener('click',addAllConsented);
 
 var ti=document.getElementById('tagInput');
 ti.addEventListener('keydown',function(e){
@@ -1611,10 +1782,9 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     btn.className='btn-primary success';
     var ico2=btn.querySelector('#btnIcon'); if(ico2) ico2.style.display='';
     setText('btnLabel', 'Offers Sent!');
-    S.broadcast={slotId:res.data.slot_id,slotTime:sd,clinician:cl||null,sentAt:new Date(),emails:S.tags.slice()};
+    S.broadcast={slotId:res.data.slot_id,slotTime:sd,clinician:cl||null,status:'broadcasting',sentAt:new Date(),emails:S.tags.slice()};
     S.stats.broadcasts++;
     S.stats.offers+=res.data.offers_sent;
-    updateMetrics();
     lockForm();
     initRoster(S.broadcast.emails);
     renderBroadcasting();
@@ -1622,6 +1792,7 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     addLog('SEND','Sent '+res.data.offers_sent+' offer'+(res.data.offers_sent!==1?'s':'')+' — '+fmtSlot(sd));
     setConn(true);
     saveState();
+    loadDashboardMetrics();
   })
   .catch(function(err){
     var spp=btn.querySelector('.spin'); if(spp) btn.removeChild(spp);
@@ -1643,7 +1814,7 @@ function doReset(){
   prefillSlot(); renderTags(); unlockForm(); renderIdle();
   removeClass('rosterPanel', 'show');
   document.getElementById('rosterBody').innerHTML='';
-  updateResetBtn(); updateMetrics();
+  updateResetBtn(); loadDashboardMetrics();
 }
 
 function doRebroadcast(){
@@ -1654,7 +1825,7 @@ function doRebroadcast(){
   document.getElementById('rosterBody').innerHTML='';
   ti.focus();
   addLog('INFO','Form reset — slot details retained');
-  updateResetBtn(); updateMetrics();
+  updateResetBtn(); loadDashboardMetrics();
   saveState();
 }
 
@@ -1685,15 +1856,25 @@ function healthCheck(){
 
 /* ─── INIT ───────────────────────────────── */
 loadState();
+renderTags();
+loadWaitlistPatients();
 if(S.broadcast){
-  renderBroadcasting();
+  if(S.broadcast.status==='locked'||S.broadcast.status==='accepted'){
+    renderLocked({accepted_by:null,locked_at:null});
+  } else if(S.broadcast.status==='declined'){
+    renderDeclined();
+  } else if(S.broadcast.status==='expired'){
+    renderExpired();
+  } else {
+    renderBroadcasting();
+    startPoll(S.broadcast.slotId);
+  }
   renderRoster();
   addClass('rosterPanel', 'show');
-  updateMetrics();
-  startPoll(S.broadcast.slotId);
+  loadDashboardMetrics();
 } else {
   renderIdle();
-  updateMetrics();
+  loadDashboardMetrics();
 }
 healthCheck();
 

@@ -642,6 +642,60 @@ async def slot_status(slot_id: str, request: Request) -> SlotStatusResponse:
     return await build_slot_status_response(request.app.state.pool, slot)
 
 
+@app.get("/api/debug/slot/{slot_id}")
+async def api_debug_slot(slot_id: str, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        slot_uuid = uuid.UUID(slot_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Slot not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        slot = await conn.fetchrow(
+            """
+            SELECT id::text, status, accepted_by, locked_at
+            FROM waitlist_slots
+            WHERE id = $1 AND clinic_id = $2
+            """,
+            slot_uuid,
+            clinic_uuid,
+        )
+        if not slot:
+            raise HTTPException(status_code=404, detail="Slot not found")
+
+        offer_rows = await conn.fetch(
+            """
+            SELECT patient_email, status, accepted_at, declined_at, created_at
+            FROM waitlist_offers
+            WHERE slot_id = $1 AND clinic_id = $2
+            ORDER BY created_at ASC
+            """,
+            slot_uuid,
+            clinic_uuid,
+        )
+
+    return {
+        "id": slot["id"],
+        "status": slot["status"],
+        "accepted_by": slot["accepted_by"],
+        "locked_at": iso_or_none(slot["locked_at"]),
+        "offers": [
+            {
+                "patient_email": row["patient_email"],
+                "status": row["status"],
+                "accepted_at": iso_or_none(row["accepted_at"]),
+                "declined_at": iso_or_none(row["declined_at"]),
+                "created_at": iso_or_none(row["created_at"]),
+            }
+            for row in offer_rows
+        ],
+    }
+
+
 @app.get("/offer/{token}", response_class=HTMLResponse)
 async def view_offer(token: str, request: Request) -> HTMLResponse:
     offer_id = verify_secure_token(token)
@@ -839,7 +893,12 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
         offer_id=str(offer["id"]),
         patient_email=str(offer["patient_email"]),
         client_ip=request.client.host if request.client else None,
-        details={"clinician": slot["clinician"]},
+        details={
+            "clinician": slot["clinician"],
+            "user_agent": request.headers.get("user-agent"),
+            "accept_token_offer_id": offer_id,
+            "accepted_at": now.isoformat(),
+        },
     )
 
     slot_time = slot["slot_time"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
