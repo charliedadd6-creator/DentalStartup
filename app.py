@@ -140,6 +140,7 @@ class SlotStatusResponse(BaseModel):
 async def log_clinical_event(
     pool: asyncpg.Pool,
     event_type: str,
+    clinic_id: str | None = None,
     slot_id: str | None = None,
     offer_id: str | None = None,
     patient_email: str | None = None,
@@ -152,15 +153,17 @@ async def log_clinical_event(
         email_hash = hashlib.sha256(patient_email.strip().lower().encode("utf-8")).hexdigest()
 
     try:
+        clinic_uuid = uuid.UUID(str(clinic_id)) if clinic_id else None
         slot_uuid = uuid.UUID(str(slot_id)) if slot_id else None
         offer_uuid = uuid.UUID(str(offer_id)) if offer_id else None
         details_json = json.dumps(details or {}, default=str)
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO audit_log (event_type, slot_id, offer_id, patient_email_hash, client_ip, success, details)
-                VALUES ($1, $2, $3, $4, $5, $6, $7);
+                INSERT INTO audit_log (clinic_id, event_type, slot_id, offer_id, patient_email_hash, client_ip, success, details)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
                 """,
+                clinic_uuid,
                 event_type,
                 slot_uuid,
                 offer_uuid,
@@ -308,13 +311,18 @@ async def broadcast(
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    slot = await create_broadcast_slot(http_request.app.state.pool, request)
-    offers = await create_waitlist_offers(http_request.app.state.pool, slot["id"], request.patient_emails)
+    clinic_id = http_request.session.get("clinic_id")
+    if not clinic_id:
+        raise HTTPException(status_code=401, detail="Clinic session missing")
+
+    slot = await create_broadcast_slot(http_request.app.state.pool, request, clinic_id)
+    offers = await create_waitlist_offers(http_request.app.state.pool, slot["id"], request.patient_emails, clinic_id)
     background_tasks.add_task(send_waitlist_offer_emails, slot, offers)
     background_tasks.add_task(
         log_clinical_event,
         http_request.app.state.pool,
         "broadcast_dispatched",
+        clinic_id=clinic_id,
         slot_id=str(slot["id"]),
         client_ip=http_request.client.host if http_request.client else None,
         details={"offers_sent": len(offers), "clinician": request.clinician},
@@ -921,61 +929,6 @@ def _html_decline_page(state: str, slot_time: "datetime | None", clinician: "str
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS waitlist_slots (
-                id UUID PRIMARY KEY,
-                slot_time TIMESTAMPTZ NOT NULL,
-                clinician TEXT,
-                status TEXT NOT NULL DEFAULT 'broadcasting',
-                accepted_by TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                locked_at TIMESTAMPTZ
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS waitlist_offers (
-                id UUID PRIMARY KEY,
-                slot_id UUID NOT NULL REFERENCES waitlist_slots(id) ON DELETE CASCADE,
-                patient_email TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'sent',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                accepted_at TIMESTAMPTZ,
-                declined_at TIMESTAMPTZ
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_waitlist_offers_slot_id
-            ON waitlist_offers(slot_id)
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id BIGSERIAL PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                slot_id UUID,
-                offer_id UUID,
-                patient_email_hash TEXT,
-                client_ip TEXT,
-                success BOOLEAN NOT NULL DEFAULT TRUE,
-                details TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_audit_log_slot_id
-            ON audit_log(slot_id)
-            WHERE slot_id IS NOT NULL
-            """
-        )
-
         # =========================
         # AUTH TABLES
         # =========================
@@ -1000,17 +953,107 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         );
         """)
 
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS waitlist_slots (
+                id UUID PRIMARY KEY,
+                clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE,
+                slot_time TIMESTAMPTZ NOT NULL,
+                clinician TEXT,
+                status TEXT NOT NULL DEFAULT 'broadcasting',
+                accepted_by TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                locked_at TIMESTAMPTZ
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS waitlist_offers (
+                id UUID PRIMARY KEY,
+                clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE,
+                slot_id UUID NOT NULL REFERENCES waitlist_slots(id) ON DELETE CASCADE,
+                patient_email TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sent',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                accepted_at TIMESTAMPTZ,
+                declined_at TIMESTAMPTZ
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_waitlist_offers_slot_id
+            ON waitlist_offers(slot_id)
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id BIGSERIAL PRIMARY KEY,
+                clinic_id UUID REFERENCES clinics(id) ON DELETE SET NULL,
+                event_type TEXT NOT NULL,
+                slot_id UUID,
+                offer_id UUID,
+                patient_email_hash TEXT,
+                client_ip TEXT,
+                success BOOLEAN NOT NULL DEFAULT TRUE,
+                details TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_log_slot_id
+            ON audit_log(slot_id)
+            WHERE slot_id IS NOT NULL
+            """
+        )
 
-async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferRequest) -> asyncpg.Record:
+        await conn.execute("""
+        ALTER TABLE waitlist_slots
+        ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE audit_log
+        ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE SET NULL;
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_waitlist_slots_clinic_id
+        ON waitlist_slots(clinic_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_waitlist_offers_clinic_id
+        ON waitlist_offers(clinic_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_audit_log_clinic_id
+        ON audit_log(clinic_id);
+        """)
+
+
+async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferRequest, clinic_id: str) -> asyncpg.Record:
     slot_id = uuid.uuid4()
+    clinic_uuid = uuid.UUID(str(clinic_id))
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            INSERT INTO waitlist_slots (id, slot_time, clinician, status)
-            VALUES ($1, $2, $3, 'broadcasting')
+            INSERT INTO waitlist_slots (id, clinic_id, slot_time, clinician, status)
+            VALUES ($1, $2, $3, $4, 'broadcasting')
             RETURNING id::text, slot_time, clinician, status, accepted_by, locked_at
             """,
             slot_id,
+            clinic_uuid,
             request.slot_time,
             request.clinician,
         )
@@ -1020,13 +1063,15 @@ async def create_waitlist_offers(
     pool: asyncpg.Pool,
     slot_id: str,
     emails: list[EmailStr],
+    clinic_id: str,
 ) -> list[asyncpg.Record]:
-    rows = [(uuid.uuid4(), uuid.UUID(slot_id), str(email).lower()) for email in emails]
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    rows = [(uuid.uuid4(), clinic_uuid, uuid.UUID(slot_id), str(email).lower()) for email in emails]
     async with pool.acquire() as conn:
         await conn.executemany(
             """
-            INSERT INTO waitlist_offers (id, slot_id, patient_email, status)
-            VALUES ($1, $2, $3, 'sent')
+            INSERT INTO waitlist_offers (id, clinic_id, slot_id, patient_email, status)
+            VALUES ($1, $2, $3, $4, 'sent')
             """,
             rows,
         )
@@ -1034,10 +1079,11 @@ async def create_waitlist_offers(
             """
             SELECT id::text, slot_id::text, patient_email, status
             FROM waitlist_offers
-            WHERE slot_id = $1
+            WHERE slot_id = $1 AND clinic_id = $2
             ORDER BY created_at ASC
             """,
             uuid.UUID(slot_id),
+            clinic_uuid,
         )
 
 
