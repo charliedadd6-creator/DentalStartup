@@ -1144,18 +1144,10 @@ async def build_slot_status_response(pool: asyncpg.Pool, slot: asyncpg.Record) -
         offers_sent = len(offer_rows)
         has_offers = len(offer_rows) > 0
         all_declined = has_offers and all(row["status"] == "declined" for row in offer_rows)
-        status = slot["status"]
+        response_status = slot["status"]
 
-        if all_declined and status == "broadcasting":
-            await conn.execute(
-                """
-                UPDATE waitlist_slots
-                SET status = 'declined'
-                WHERE id = $1
-                """,
-                slot_uuid,
-            )
-            status = "declined"
+        if all_declined and slot["status"] == "broadcasting":
+            response_status = "declined"
 
     offers = [
         {"patient_email": row["patient_email"], "status": row["status"]}
@@ -1166,7 +1158,7 @@ async def build_slot_status_response(pool: asyncpg.Pool, slot: asyncpg.Record) -
         slot_id=slot["id"],
         slot_time=slot["slot_time"],
         clinician=slot["clinician"],
-        status=status,
+        status=response_status,
         offers_sent=offers_sent,
         accepted_by=slot["accepted_by"],
         locked_at=slot["locked_at"],
