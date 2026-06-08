@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -671,6 +671,8 @@ async def slot_status(slot_id: str, request: Request) -> SlotStatusResponse:
 
     clinic_id = get_session_clinic_id(request)
     slot = await get_slot_or_404(request.app.state.pool, slot_id, clinic_id)
+    await expire_stale_offers(request.app.state.pool, slot_id, clinic_id)
+    slot = await get_slot_or_404(request.app.state.pool, slot_id, clinic_id)
     return await build_slot_status_response(request.app.state.pool, slot)
 
 
@@ -860,7 +862,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
         async with conn.transaction():
             offer = await conn.fetchrow(
                 """
-                SELECT id, slot_id, patient_email, status
+                SELECT id, slot_id, patient_email, status, expires_at
                 FROM waitlist_offers
                 WHERE id = $1
                 FOR UPDATE
@@ -880,16 +882,6 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                     "<h1>Offer Already Declined</h1><p>This appointment offer was already declined.</p>",
                     status_code=409,
                 )
-            if offer["status"] == "expired":
-                return HTMLResponse(
-                    "<h1>Offer Expired</h1><p>This appointment offer has expired.</p>",
-                    status_code=409,
-                )
-            if offer["status"] != "sent":
-                return HTMLResponse(
-                    "<h1>Offer Unavailable</h1><p>This appointment offer can no longer be accepted.</p>",
-                    status_code=409,
-                )
 
             slot = await conn.fetchrow(
                 """
@@ -902,6 +894,29 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
             )
             if not slot:
                 raise HTTPException(status_code=404, detail="Slot not found")
+
+            if offer["status"] == "expired" or (
+                offer["expires_at"] is not None and offer["expires_at"] <= now
+            ):
+                await conn.execute(
+                    """
+                    UPDATE waitlist_offers
+                    SET status = 'expired', expired_at = $2
+                    WHERE id = $1 AND status = 'sent'
+                    """,
+                    offer["id"],
+                    now,
+                )
+                return HTMLResponse(
+                    "<h1>Offer Expired</h1><p>This appointment offer has expired.</p>",
+                    status_code=409,
+                )
+
+            if offer["status"] != "sent":
+                return HTMLResponse(
+                    "<h1>Offer Unavailable</h1><p>This appointment offer can no longer be accepted.</p>",
+                    status_code=409,
+                )
 
             if slot["status"] == "locked":
                 return HTMLResponse(
@@ -1481,8 +1496,28 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         """)
 
         await conn.execute("""
+        ALTER TABLE waitlist_slots
+        ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_slots
+        ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
         ALTER TABLE waitlist_offers
         ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE CASCADE;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ;
         """)
 
         await conn.execute("""
@@ -1501,6 +1536,16 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         """)
 
         await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_waitlist_slots_expires_at
+        ON waitlist_slots(expires_at);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_waitlist_offers_expires_at
+        ON waitlist_offers(expires_at);
+        """)
+
+        await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_audit_log_clinic_id
         ON audit_log(clinic_id);
         """)
@@ -1509,14 +1554,15 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
 async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferRequest, clinic_id: str) -> asyncpg.Record:
     slot_id = uuid.uuid4()
     clinic_uuid = uuid.UUID(str(clinic_id))
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=4)
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
             INSERT INTO waitlist_slots (
-                id, clinic_id, slot_time, clinician, appointment_type, slot_value_pence, status
+                id, clinic_id, slot_time, clinician, appointment_type, slot_value_pence, status, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'broadcasting')
-            RETURNING id::text, slot_time, clinician, status, accepted_by, locked_at
+            VALUES ($1, $2, $3, $4, $5, $6, 'broadcasting', $7)
+            RETURNING id::text, slot_time, clinician, status, accepted_by, locked_at, expires_at
             """,
             slot_id,
             clinic_uuid,
@@ -1524,6 +1570,7 @@ async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferReque
             request.clinician,
             request.appointment_type,
             request.slot_value_pence,
+            expires_at,
         )
 
 
@@ -1534,12 +1581,26 @@ async def create_waitlist_offers(
     clinic_id: str,
 ) -> list[asyncpg.Record]:
     clinic_uuid = uuid.UUID(str(clinic_id))
-    rows = [(uuid.uuid4(), clinic_uuid, uuid.UUID(slot_id), str(email).lower()) for email in emails]
+    slot_uuid = uuid.UUID(slot_id)
     async with pool.acquire() as conn:
+        slot_expires_at = await conn.fetchval(
+            """
+            SELECT expires_at
+            FROM waitlist_slots
+            WHERE id = $1 AND clinic_id = $2
+            """,
+            slot_uuid,
+            clinic_uuid,
+        )
+        expires_at = slot_expires_at or datetime.now(timezone.utc) + timedelta(hours=4)
+        rows = [
+            (uuid.uuid4(), clinic_uuid, slot_uuid, str(email).lower(), expires_at)
+            for email in emails
+        ]
         await conn.executemany(
             """
-            INSERT INTO waitlist_offers (id, clinic_id, slot_id, patient_email, status)
-            VALUES ($1, $2, $3, $4, 'sent')
+            INSERT INTO waitlist_offers (id, clinic_id, slot_id, patient_email, status, expires_at)
+            VALUES ($1, $2, $3, $4, 'sent', $5)
             """,
             rows,
         )
@@ -1550,9 +1611,77 @@ async def create_waitlist_offers(
             WHERE slot_id = $1 AND clinic_id = $2
             ORDER BY created_at ASC
             """,
-            uuid.UUID(slot_id),
+            slot_uuid,
             clinic_uuid,
         )
+
+
+async def expire_stale_offers(pool: asyncpg.Pool, slot_id: str, clinic_id: str) -> None:
+    slot_uuid = uuid.UUID(str(slot_id))
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    now = datetime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE waitlist_offers
+            SET status = 'expired', expired_at = $3
+            WHERE slot_id = $1
+              AND clinic_id = $2
+              AND status = 'sent'
+              AND expires_at IS NOT NULL
+              AND expires_at <= $3
+            """,
+            slot_uuid,
+            clinic_uuid,
+            now,
+        )
+
+        summary = await conn.fetchrow(
+            """
+            SELECT
+                s.status,
+                COUNT(o.id)::int AS offers_sent,
+                (COUNT(o.id) FILTER (WHERE o.status = 'sent'))::int AS pending_offers,
+                (COUNT(o.id) FILTER (WHERE o.status = 'accepted'))::int AS accepted_offers,
+                (COUNT(o.id) FILTER (WHERE o.status = 'expired'))::int AS expired_offers
+            FROM waitlist_slots s
+            LEFT JOIN waitlist_offers o
+              ON o.slot_id = s.id
+             AND o.clinic_id = s.clinic_id
+            WHERE s.id = $1 AND s.clinic_id = $2
+            GROUP BY s.id
+            """,
+            slot_uuid,
+            clinic_uuid,
+        )
+
+        if (
+            summary
+            and summary["status"] == "broadcasting"
+            and summary["offers_sent"] > 0
+            and summary["pending_offers"] == 0
+            and summary["accepted_offers"] == 0
+            and summary["expired_offers"] > 0
+        ):
+            try:
+                await conn.execute(
+                    """
+                    UPDATE waitlist_slots
+                    SET status = 'expired', expired_at = $3
+                    WHERE id = $1
+                      AND clinic_id = $2
+                      AND status = 'broadcasting'
+                    """,
+                    slot_uuid,
+                    clinic_uuid,
+                    now,
+                )
+            except asyncpg.PostgresError:
+                log.exception(
+                    "Failed to mark slot %s expired after stale offers expired; using effective status.",
+                    slot_id,
+                )
 
 
 async def get_slot_or_404(pool: asyncpg.Pool, slot_id: str, clinic_id: str) -> asyncpg.Record:
@@ -1613,10 +1742,21 @@ async def build_slot_status_response(pool: asyncpg.Pool, slot: asyncpg.Record) -
         offers_sent = len(offer_rows)
         has_offers = len(offer_rows) > 0
         all_declined = has_offers and all(row["status"] == "declined" for row in offer_rows)
+        pending_offers = sum(1 for row in offer_rows if row["status"] == "sent")
+        accepted_offers = sum(1 for row in offer_rows if row["status"] == "accepted")
+        expired_offers = sum(1 for row in offer_rows if row["status"] == "expired")
         response_status = slot["status"]
 
         if all_declined and slot["status"] == "broadcasting":
             response_status = "declined"
+        if (
+            slot["status"] == "broadcasting"
+            and offers_sent > 0
+            and pending_offers == 0
+            and accepted_offers == 0
+            and expired_offers > 0
+        ):
+            response_status = "expired"
 
     offers = [
         {"patient_email": row["patient_email"], "status": row["status"]}
