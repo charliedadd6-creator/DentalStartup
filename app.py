@@ -404,26 +404,50 @@ async def api_broadcasts(request: Request):
             clinic_uuid,
         )
 
-    return [
-        {
-            "id": row["id"],
-            "slot_time": iso_or_none(row["slot_time"]),
-            "clinician": row["clinician"],
-            "appointment_type": row["appointment_type"],
-            "slot_value_pence": row["slot_value_pence"],
-            "slot_value": row["slot_value_pence"],
-            "status": row["status"],
-            "accepted_by": row["accepted_by"],
-            "created_at": iso_or_none(row["created_at"]),
-            "locked_at": iso_or_none(row["locked_at"]),
-            "offers_sent": row["offers_sent"],
-            "accepted_offers": row["accepted_offers"],
-            "declined_offers": row["declined_offers"],
-            "expired_offers": row["expired_offers"],
-            "pending_offers": row["pending_offers"],
-        }
-        for row in rows
-    ]
+    broadcasts = []
+    for row in rows:
+        effective_status = row["status"]
+
+        if (
+            row["status"] == "broadcasting"
+            and row["offers_sent"] > 0
+            and row["pending_offers"] == 0
+            and row["accepted_offers"] == 0
+            and row["declined_offers"] > 0
+            and row["expired_offers"] == 0
+        ):
+            effective_status = "declined"
+
+        if (
+            row["status"] == "broadcasting"
+            and row["offers_sent"] > 0
+            and row["pending_offers"] == 0
+            and row["accepted_offers"] == 0
+            and row["expired_offers"] > 0
+        ):
+            effective_status = "expired"
+
+        broadcasts.append(
+            {
+                "id": row["id"],
+                "slot_time": iso_or_none(row["slot_time"]),
+                "clinician": row["clinician"],
+                "appointment_type": row["appointment_type"],
+                "slot_value_pence": row["slot_value_pence"],
+                "slot_value": row["slot_value_pence"],
+                "status": effective_status,
+                "accepted_by": row["accepted_by"],
+                "created_at": iso_or_none(row["created_at"]),
+                "locked_at": iso_or_none(row["locked_at"]),
+                "offers_sent": row["offers_sent"],
+                "accepted_offers": row["accepted_offers"],
+                "declined_offers": row["declined_offers"],
+                "expired_offers": row["expired_offers"],
+                "pending_offers": row["pending_offers"],
+            }
+        )
+
+    return broadcasts
 
 
 @app.get("/api/appointments/recovered")
