@@ -19,27 +19,27 @@
         .topbar { height: 56px; background: white; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; padding: 0 24px; }
         .topbar-title { font-size: 15px; font-weight: 700; color: #0f172a; }
         .topbar-sub { font-size: 12px; color: #94a3b8; margin-top: 1px; }
-        .content { padding: 24px; flex: 1; max-width: 700px; }
+        .content { padding: 24px; flex: 1; max-width: 820px; }
         .panel { background: white; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; margin-bottom: 16px; }
         .panel-head { padding: 14px 20px; border-bottom: 1px solid #f1f5f9; }
         .panel-head-title { font-size: 13px; font-weight: 700; color: #0f172a; }
         .panel-head-sub { font-size: 11px; color: #94a3b8; margin-top: 1px; }
         .panel-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .field { display: flex; flex-direction: column; gap: 5px; }
         .field label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
-        .field input { height: 36px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; font-family: Inter, sans-serif; color: #0f172a; background: #f8fafc; outline: none; }
-        .field input:focus { border-color: #2563eb; background: white; }
+        .field input, .field textarea { padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; font-family: Inter, sans-serif; color: #0f172a; background: #f8fafc; outline: none; }
+        .field input { height: 36px; }
+        .field textarea { min-height: 92px; padding-top: 10px; resize: vertical; line-height: 1.5; }
+        .field input:focus, .field textarea:focus { border-color: #2563eb; background: white; }
         .field-hint { font-size: 10px; color: #94a3b8; }
-        .save-btn { background: #1e3a8a; color: white; border: none; border-radius: 8px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; align-self: flex-start; }
-        .save-btn:hover { opacity: 0.9; }
-        .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
-        .toggle-label { font-size: 13px; color: #334155; font-weight: 500; }
-        .toggle-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-        .toggle { width: 36px; height: 20px; background: #e2e8f0; border-radius: 10px; position: relative; cursor: pointer; flex-shrink: 0; }
-        .toggle.on { background: #1e3a8a; }
-        .toggle::after { content: ''; position: absolute; width: 16px; height: 16px; background: white; border-radius: 50%; top: 2px; left: 2px; transition: left 150ms; }
-        .toggle.on::after { left: 18px; }
-        .version-tag { font-size: 11px; color: #94a3b8; padding: 20px; text-align: center; }
+        .actions { display: flex; align-items: center; gap: 12px; }
+        .save-btn { background: #1e3a8a; color: white; border: none; border-radius: 8px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .save-btn:disabled { opacity: 0.65; cursor: default; }
+        .msg { font-size: 12px; font-weight: 600; min-height: 16px; }
+        .msg.ok { color: #15803d; }
+        .msg.err { color: #b91c1c; }
+        @media (max-width: 760px) { body { display: block; } .sidebar { width: 100%; min-height: auto; } .grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -79,91 +79,141 @@
     <div class="topbar">
         <div>
             <div class="topbar-title">Settings</div>
-            <div class="topbar-sub">Configure your SwiftSlot system</div>
+            <div class="topbar-sub">Clinic identity, patient email defaults, and offer expiry</div>
         </div>
     </div>
     <div class="content">
-        <div class="panel">
-            <div class="panel-head">
-                <div class="panel-head-title">Practice Details</div>
-                <div class="panel-head-sub">Your clinic information shown to patients</div>
-            </div>
-            <div class="panel-body">
-                <div class="field">
-                    <label>Practice Name</label>
-                    <input type="text" placeholder="e.g. Smile Dental Practice">
-                    <div class="field-hint">Displayed in patient notification emails</div>
+        <form id="settingsForm">
+            <div class="panel">
+                <div class="panel-head">
+                    <div class="panel-head-title">Clinic Details</div>
+                    <div class="panel-head-sub">Shown on patient-facing offer pages and recovery emails</div>
                 </div>
-                <div class="field">
-                    <label>Contact Email</label>
-                    <input type="email" placeholder="reception@yourpractice.com">
-                    <div class="field-hint">Used for system notifications</div>
-                </div>
-                <div class="field">
-                    <label>Phone Number</label>
-                    <input type="text" placeholder="01234 567890">
-                </div>
-                <button class="save-btn">Save Changes</button>
-            </div>
-        </div>
-        <div class="panel">
-            <div class="panel-head">
-                <div class="panel-head-title">Broadcast Settings</div>
-                <div class="panel-head-sub">Control how offers are sent to patients</div>
-            </div>
-            <div class="panel-body">
-                <div class="toggle-row">
-                    <div>
-                        <div class="toggle-label">Email Notifications</div>
-                        <div class="field-hint">Send offer emails to waitlist patients</div>
+                <div class="panel-body">
+                    <div class="grid">
+                        <div class="field">
+                            <label for="displayName">Clinic display name</label>
+                            <input id="displayName" type="text" autocomplete="organization">
+                        </div>
+                        <div class="field">
+                            <label for="contactEmail">Contact email</label>
+                            <input id="contactEmail" type="email" autocomplete="email">
+                        </div>
+                        <div class="field">
+                            <label for="phone">Phone</label>
+                            <input id="phone" type="text" autocomplete="tel">
+                        </div>
+                        <div class="field">
+                            <label for="senderName">Sender name</label>
+                            <input id="senderName" type="text">
+                            <div class="field-hint">Used as the clinic name fallback in patient communications.</div>
+                        </div>
+                        <div class="field">
+                            <label for="replyToEmail">Reply-to email</label>
+                            <input id="replyToEmail" type="email">
+                        </div>
                     </div>
-                    <div class="toggle on" onclick="this.classList.toggle('on')"></div>
                 </div>
-                <div class="toggle-row">
-                    <div>
-                        <div class="toggle-label">Auto-expire Offers</div>
-                        <div class="field-hint">Automatically expire offers after 4 hours</div>
+            </div>
+            <div class="panel">
+                <div class="panel-head">
+                    <div class="panel-head-title">Broadcast Defaults</div>
+                    <div class="panel-head-sub">Applied when creating new recovery broadcasts</div>
+                </div>
+                <div class="panel-body">
+                    <div class="grid">
+                        <div class="field">
+                            <label for="defaultSlotValue">Default slot value (£)</label>
+                            <input id="defaultSlotValue" type="number" min="0" step="0.01">
+                        </div>
+                        <div class="field">
+                            <label for="defaultExpiry">Default offer expiry minutes</label>
+                            <input id="defaultExpiry" type="number" min="5" max="1440" step="1">
+                            <div class="field-hint">Allowed range: 5 minutes to 24 hours.</div>
+                        </div>
                     </div>
-                    <div class="toggle on" onclick="this.classList.toggle('on')"></div>
-                </div>
-                <div class="toggle-row">
-                    <div>
-                        <div class="toggle-label">GDPR Consent Check</div>
-                        <div class="field-hint">Require consent confirmation before broadcast</div>
+                    <div class="field">
+                        <label for="gdprNotice">GDPR notice text</label>
+                        <textarea id="gdprNotice"></textarea>
+                        <div class="field-hint">Shown on the dashboard and included in patient offer emails.</div>
                     </div>
-                    <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+                    <div class="actions">
+                        <button class="save-btn" id="saveBtn" type="submit">Save Changes</button>
+                        <span class="msg" id="settingsMsg"></span>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="panel">
-            <div class="panel-head">
-                <div class="panel-head-title">System Information</div>
-            </div>
-            <div class="panel-body">
-                <div class="field">
-                    <label>Version</label>
-                    <input type="text" value="SwiftSlot v0.2.0 — Sidecar Pilot" disabled>
-                </div>
-                <div class="field">
-                    <label>Database</label>
-                    <input type="text" value="Neon PostgreSQL — Connected" disabled>
-                </div>
-            </div>
-        </div>
+        </form>
     </div>
 </div>
 <script>
 (function () {
-  var path = window.location.pathname;
-  var links = document.querySelectorAll('.sidebar-nav .nav-item');
+  function byId(id){ return document.getElementById(id); }
+  function setMsg(text, cls){
+    var el=byId('settingsMsg');
+    el.textContent=text || '';
+    el.className='msg '+(cls || '');
+  }
+  function poundsFromPence(pence){
+    return ((Number(pence || 0) / 100).toFixed(2)).replace(/\.00$/, '');
+  }
+  function penceFromPounds(value){
+    var n=parseFloat(value || '0');
+    if(!isFinite(n) || n < 0) return 0;
+    return Math.round(n * 100);
+  }
+  function populate(data){
+    byId('displayName').value=data.clinic_name || '';
+    byId('contactEmail').value=data.contact_email || '';
+    byId('phone').value=data.phone || '';
+    byId('senderName').value=data.sender_name || '';
+    byId('replyToEmail').value=data.reply_to_email || '';
+    byId('defaultSlotValue').value=poundsFromPence(data.default_slot_value_pence);
+    byId('defaultExpiry').value=data.default_expiry_minutes || 240;
+    byId('gdprNotice').value=data.gdpr_notice || '';
+  }
+  fetch('/api/clinic/settings')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(populate)
+    .catch(function(){ setMsg('Could not load settings.', 'err'); });
 
-  links.forEach(function (link) {
+  byId('settingsForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var btn=byId('saveBtn');
+    btn.disabled=true;
+    btn.textContent='Saving...';
+    setMsg('', '');
+    fetch('/api/clinic/settings', {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        display_name: byId('displayName').value.trim(),
+        contact_email: byId('contactEmail').value.trim() || null,
+        phone: byId('phone').value.trim() || null,
+        sender_name: byId('senderName').value.trim() || null,
+        reply_to_email: byId('replyToEmail').value.trim() || null,
+        default_slot_value_pence: penceFromPounds(byId('defaultSlotValue').value),
+        default_expiry_minutes: Number(byId('defaultExpiry').value || 240),
+        gdpr_notice: byId('gdprNotice').value.trim() || null
+      })
+    })
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Save failed');
+        populate(res.data);
+        setMsg('Settings saved.', 'ok');
+      })
+      .catch(function(err){ setMsg(err.message || 'Could not save settings.', 'err'); })
+      .finally(function(){
+        btn.disabled=false;
+        btn.textContent='Save Changes';
+      });
+  });
+
+  var path = window.location.pathname;
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(function (link) {
     var route = link.getAttribute('data-route') || link.getAttribute('href');
-    if (route === path) {
-      link.classList.add('active');
-    } else {
-      link.classList.remove('active');
-    }
+    link.classList.toggle('active', route === path);
   });
 })();
 </script>

@@ -59,6 +59,22 @@ def iso_or_none(value):
     return value
 
 
+DEFAULT_GDPR_NOTICE = (
+    "Only contact patients who have given explicit consent to receive short-notice appointment offers."
+)
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def clamp_expiry_minutes(value: int) -> int:
+    return max(5, min(value, 1440))
+
+
 def generate_secure_token(offer_id: str) -> str:
     timestamp = int(time.time())
     payload = f"{offer_id}:{timestamp}".encode("utf-8")
@@ -145,6 +161,57 @@ class DashboardOfferRequest(BaseModel):
         return deduped
 
 
+class ClinicSettingsUpdate(BaseModel):
+    display_name: str | None = None
+    contact_email: EmailStr | None = None
+    phone: str | None = None
+    sender_name: str | None = None
+    reply_to_email: EmailStr | None = None
+    default_slot_value_pence: int | None = None
+    default_expiry_minutes: int | None = None
+    gdpr_notice: str | None = None
+
+    @field_validator("contact_email", "reply_to_email", mode="before")
+    @classmethod
+    def normalize_optional_email(cls, value):
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("display_name cannot be empty")
+        return trimmed
+
+    @field_validator("phone", "sender_name", "gdpr_notice", mode="before")
+    @classmethod
+    def normalize_optional_string(cls, value):
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator("default_slot_value_pence")
+    @classmethod
+    def validate_default_slot_value(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("default_slot_value_pence cannot be negative")
+        return value
+
+    @field_validator("default_expiry_minutes")
+    @classmethod
+    def validate_default_expiry(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return clamp_expiry_minutes(value)
+
+
 class PatientCreate(BaseModel):
     first_name: str
     last_name: str | None = None
@@ -211,6 +278,48 @@ async def log_clinical_event(
             )
     except Exception as e:
         print(f"FAILED TO WRITE TO AUDIT LOG: {e}")
+
+
+async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                id::text,
+                name,
+                display_name,
+                contact_email,
+                phone,
+                sender_name,
+                reply_to_email,
+                default_slot_value_pence,
+                default_expiry_minutes,
+                gdpr_notice
+            FROM clinics
+            WHERE id = $1
+            """,
+            clinic_uuid,
+        )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Clinic not found")
+
+    clinic_name = row["display_name"] or row["name"] or "Your clinic"
+    contact_email = row["contact_email"]
+    default_expiry = clamp_expiry_minutes(safe_int(row["default_expiry_minutes"], 240))
+
+    return {
+        "clinic_id": row["id"],
+        "clinic_name": clinic_name,
+        "contact_email": contact_email,
+        "phone": row["phone"],
+        "sender_name": row["sender_name"] or clinic_name or "SwiftSlot",
+        "reply_to_email": row["reply_to_email"] or contact_email,
+        "default_slot_value_pence": max(0, safe_int(row["default_slot_value_pence"], 0)),
+        "default_expiry_minutes": default_expiry,
+        "gdpr_notice": row["gdpr_notice"] or DEFAULT_GDPR_NOTICE,
+    }
 
 
 @asynccontextmanager
@@ -338,6 +447,83 @@ async def settings_page(request: Request):
     return HTMLResponse(html)
 
 
+@app.get("/api/clinic/settings")
+async def api_get_clinic_settings(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    return await get_clinic_settings(request.app.state.pool, clinic_id)
+
+
+@app.patch("/api/clinic/settings")
+async def api_update_clinic_settings(update: ClinicSettingsUpdate, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    allowed_fields = {
+        "display_name",
+        "contact_email",
+        "phone",
+        "sender_name",
+        "reply_to_email",
+        "default_slot_value_pence",
+        "default_expiry_minutes",
+        "gdpr_notice",
+    }
+    payload = update.model_dump(exclude_unset=True)
+    fields = [field for field in update.model_fields_set if field in allowed_fields]
+
+    if fields:
+        assignments = []
+        values = []
+        for index, field in enumerate(fields, start=1):
+            value = payload.get(field)
+            if field in {"contact_email", "reply_to_email"} and value is not None:
+                value = str(value)
+            assignments.append(f"{field} = ${index}")
+            values.append(value)
+        assignments.append("updated_at = now()")
+        values.append(clinic_uuid)
+        async with request.app.state.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                UPDATE clinics
+                SET {", ".join(assignments)}
+                WHERE id = ${len(values)}
+                """,
+                *values,
+            )
+
+    settings_data = await get_clinic_settings(request.app.state.pool, clinic_id)
+    await log_clinical_event(
+        request.app.state.pool,
+        "clinic_settings_updated",
+        clinic_id=clinic_id,
+        client_ip=request.client.host if request.client else None,
+        details={"fields": sorted(fields)},
+    )
+    return settings_data
+
+
+@app.get("/api/me")
+async def api_me(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    return {
+        "user_id": request.session.get("user_id"),
+        "clinic_id": clinic_id,
+        "clinic": await get_clinic_settings(request.app.state.pool, clinic_id),
+    }
+
+
 @app.post("/broadcast", response_model=BroadcastResponse)
 async def broadcast(
     request: DashboardOfferRequest,
@@ -354,7 +540,7 @@ async def broadcast(
 
     slot = await create_broadcast_slot(http_request.app.state.pool, request, clinic_id)
     offers = await create_waitlist_offers(http_request.app.state.pool, slot["id"], request.patient_emails, clinic_id)
-    background_tasks.add_task(send_waitlist_offer_emails, slot, offers)
+    background_tasks.add_task(send_waitlist_offer_emails, http_request.app.state.pool, slot, offers)
     background_tasks.add_task(
         log_clinical_event,
         http_request.app.state.pool,
@@ -678,6 +864,9 @@ async def slot_status(slot_id: str, request: Request) -> SlotStatusResponse:
 
 @app.get("/api/debug/slot/{slot_id}")
 async def api_debug_slot(slot_id: str, request: Request):
+    if os.getenv("ALLOW_DEBUG_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+
     auth_redirect = require_auth(request)
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -747,9 +936,16 @@ async def view_offer(token: str, request: Request) -> HTMLResponse:
             status_code=404,
         )
 
+    clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
+    clinic_name = html.escape(clinic_settings["clinic_name"])
     slot_time = offer["slot_time"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
     clinician = html.escape(offer["clinician"] or "your clinician")
+    appointment_type = html.escape(offer["appointment_type"]) if offer["appointment_type"] else ""
     status = html.escape(offer["offer_status"])
+    expiry = ""
+    if offer["offer_expires_at"]:
+        expiry_time = offer["offer_expires_at"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
+        expiry = f'<div class="row"><span class="label">Expires</span><span class="value">{html.escape(expiry_time)}</span></div>'
 
     return HTMLResponse(
         f"""
@@ -758,7 +954,7 @@ async def view_offer(token: str, request: Request) -> HTMLResponse:
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Appointment Offer - SwiftSlot</title>
+          <title>Appointment Offer - {clinic_name}</title>
           <style>
             * {{ box-sizing: border-box; }}
             body {{
@@ -823,11 +1019,13 @@ async def view_offer(token: str, request: Request) -> HTMLResponse:
         <body>
           <main class="card">
             <div class="badge">⏱</div>
-            <h1>Appointment available</h1>
+            <h1>Appointment available at {clinic_name}</h1>
             <p class="lead">Please choose whether you would like to claim this appointment. Your response is only recorded after pressing one of the buttons below.</p>
             <div class="details">
               <div class="row"><span class="label">Appointment</span><span class="value">{html.escape(slot_time)}</span></div>
               <div class="row"><span class="label">Clinician</span><span class="value">{clinician}</span></div>
+              {f'<div class="row"><span class="label">Type</span><span class="value">{appointment_type}</span></div>' if appointment_type else ""}
+              {expiry}
             </div>
             <div class="actions">
               <form method="post" action="/accept/{html.escape(token)}">
@@ -974,6 +1172,8 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
     slot_time = slot["slot_time"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
     clinician = html.escape(slot["clinician"] or "your clinician")
     patient_email = html.escape(offer["patient_email"])
+    clinic_settings = await get_clinic_settings(pool, str(slot["clinic_id"]))
+    clinic_name = html.escape(clinic_settings["clinic_name"])
 
     return HTMLResponse(
         f"""
@@ -982,7 +1182,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Appointment Confirmed - SwiftSlot</title>
+          <title>Appointment Confirmed - {clinic_name}</title>
           <style>
             :root {{
               color-scheme: light;
@@ -1103,8 +1303,8 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                   <path d="M20 6 9 17l-5-5"></path>
                 </svg>
               </div>
-              <h1>Appointment confirmed</h1>
-              <p class="subtitle">Your appointment has been claimed successfully. The practice has been notified and the slot is now reserved for you.</p>
+              <h1>Appointment confirmed with {clinic_name}</h1>
+              <p class="subtitle">Your appointment has been claimed successfully. {clinic_name} has been notified and the slot is now reserved for you.</p>
             </section>
             <section class="content">
               <div class="detail-grid">
@@ -1121,8 +1321,8 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                   <span class="value">{patient_email}</span>
                 </div>
               </div>
-              <div class="notice">You do not need to do anything else right now. Smile Dental will contact you if any further information is needed.</div>
-              <div class="brand">SwiftSlot</div>
+              <div class="notice">You do not need to do anything else right now. {clinic_name} will contact you if any further information is needed.</div>
+              <div class="brand">{clinic_name}</div>
             </section>
           </main>
         </body>
@@ -1143,9 +1343,12 @@ async def db_get_offer_with_slot(pool: asyncpg.Pool, offer_id: str) -> asyncpg.R
                 o.id            AS offer_id,
                 o.patient_email AS offer_email,
                 o.status        AS offer_status,
+                o.expires_at    AS offer_expires_at,
                 s.id            AS slot_id,
+                s.clinic_id     AS clinic_id,
                 s.slot_time     AS slot_time,
                 s.clinician     AS clinician,
+                s.appointment_type AS appointment_type,
                 s.status        AS slot_status,
                 s.accepted_by   AS accepted_by,
                 s.locked_at     AS locked_at
@@ -1175,7 +1378,7 @@ async def db_decline_offer(pool: asyncpg.Pool, offer_id: uuid.UUID) -> dict | No
             slot_row = await conn.fetchrow(
                 """
                 SELECT
-                    s.id, s.slot_time, s.clinician, s.status, s.accepted_by,
+                    s.id, s.clinic_id, s.slot_time, s.clinician, s.status, s.accepted_by,
                     COUNT(o.id) FILTER (WHERE o.status = 'sent') AS remaining_sent
                 FROM waitlist_slots  s
                 LEFT JOIN waitlist_offers o ON o.slot_id = s.id
@@ -1188,13 +1391,13 @@ async def db_decline_offer(pool: asyncpg.Pool, offer_id: uuid.UUID) -> dict | No
         return {
             "offer_id": str(offer_row["id"]), "patient_email": offer_row["patient_email"],
             "slot_id": str(offer_row["slot_id"]), "slot_time": None, "clinician": None,
-            "slot_status": "unknown", "remaining_sent": 0,
+            "slot_status": "unknown", "remaining_sent": 0, "clinic_id": None,
         }
     return {
         "offer_id": str(offer_row["id"]), "patient_email": offer_row["patient_email"],
         "slot_id": str(slot_row["id"]), "slot_time": slot_row["slot_time"],
         "clinician": slot_row["clinician"], "slot_status": slot_row["status"],
-        "remaining_sent": int(slot_row["remaining_sent"]),
+        "remaining_sent": int(slot_row["remaining_sent"]), "clinic_id": str(slot_row["clinic_id"]),
     }
 
 
@@ -1216,12 +1419,15 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
     if not existing:
         return HTMLResponse(content=_html_decline_page("not_found", None, None, 0), status_code=404)
 
+    clinic_settings = await get_clinic_settings(pool, str(existing["clinic_id"]))
+    clinic_name = clinic_settings["clinic_name"]
+
     if existing["offer_status"] == "accepted":
-        return HTMLResponse(content=_html_decline_page("already_accepted", existing["slot_time"], existing["clinician"], 0), status_code=200)
+        return HTMLResponse(content=_html_decline_page("already_accepted", existing["slot_time"], existing["clinician"], 0, clinic_name), status_code=200)
     if existing["offer_status"] in ("declined", "expired"):
-        return HTMLResponse(content=_html_decline_page("already_declined", existing["slot_time"], existing["clinician"], 0), status_code=200)
+        return HTMLResponse(content=_html_decline_page("already_declined", existing["slot_time"], existing["clinician"], 0, clinic_name), status_code=200)
     if existing["slot_status"] == "locked":
-        return HTMLResponse(content=_html_decline_page("slot_taken", existing["slot_time"], existing["clinician"], 0), status_code=200)
+        return HTMLResponse(content=_html_decline_page("slot_taken", existing["slot_time"], existing["clinician"], 0, clinic_name), status_code=200)
 
     try:
         result = await db_decline_offer(pool, parsed_offer_id)
@@ -1233,7 +1439,7 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
         return HTMLResponse(content=_html_decline_page("error", None, None, 0), status_code=500)
 
     if result is None:
-        return HTMLResponse(content=_html_decline_page("already_declined", existing["slot_time"], existing["clinician"], 0), status_code=200)
+        return HTMLResponse(content=_html_decline_page("already_declined", existing["slot_time"], existing["clinician"], 0, clinic_name), status_code=200)
 
     background_tasks.add_task(
         log_clinical_event,
@@ -1246,7 +1452,7 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
         details={"remaining_sent": result["remaining_sent"], "clinician": result["clinician"]},
     )
     log.info(f"Offer {offer_id} declined by {result['patient_email']} — {result['remaining_sent']} offer(s) still pending for slot {result['slot_id']}")
-    return HTMLResponse(content=_html_decline_page("success", result["slot_time"], result["clinician"], result["remaining_sent"]), status_code=200)
+    return HTMLResponse(content=_html_decline_page("success", result["slot_time"], result["clinician"], result["remaining_sent"], clinic_name), status_code=200)
 
 
 # =========================
@@ -1332,9 +1538,16 @@ async def logout(request: Request):
     return JSONResponse({"status": "logged_out"})
 
 
-def _html_decline_page(state: str, slot_time: "datetime | None", clinician: "str | None", remaining: int) -> str:
+def _html_decline_page(
+    state: str,
+    slot_time: "datetime | None",
+    clinician: "str | None",
+    remaining: int,
+    clinic_name: str = "Your clinic",
+) -> str:
+    escaped_clinic_name = html.escape(clinic_name or "Your clinic")
     config = {
-        "success": {"emoji": "👋", "title": "Preference Updated", "accent": "#6366f1", "badge_bg": "#eef2ff"},
+        "success": {"emoji": "👋", "title": "Offer declined", "accent": "#6366f1", "badge_bg": "#eef2ff"},
         "already_declined": {"emoji": "✓", "title": "Already Recorded", "accent": "#6b7280", "badge_bg": "#f9fafb"},
         "already_accepted": {"emoji": "📅", "title": "You Confirmed This Appointment", "accent": "#059669", "badge_bg": "#ecfdf5"},
         "slot_taken": {"emoji": "⚡", "title": "Slot Already Filled", "accent": "#d97706", "badge_bg": "#fffbeb"},
@@ -1347,7 +1560,7 @@ def _html_decline_page(state: str, slot_time: "datetime | None", clinician: "str
     clinician_str = f" with {clinician}" if clinician else ""
 
     if state == "success":
-        body = f"We'll offer the <strong>{formatted_time}</strong> slot{clinician_str} to the next patient on the list.<br><br>We'll be in touch when another suitable appointment becomes available." if remaining > 0 else f"All patients have now responded for the <strong>{formatted_time}</strong> slot{clinician_str}.<br><br>The practice has been notified and will be in touch shortly."
+        body = f"We'll offer the <strong>{formatted_time}</strong> slot{clinician_str} to the next patient on the list.<br><br>{escaped_clinic_name} will be in touch when another suitable appointment becomes available." if remaining > 0 else f"All patients have now responded for the <strong>{formatted_time}</strong> slot{clinician_str}.<br><br>{escaped_clinic_name} has been notified."
     elif state == "already_accepted":
         body = f"You previously confirmed your appointment on <strong>{formatted_time}</strong>.<br><br>If you need to cancel, please contact the practice directly."
     elif state == "slot_taken":
@@ -1359,7 +1572,7 @@ def _html_decline_page(state: str, slot_time: "datetime | None", clinician: "str
     else:
         body = "We encountered a problem processing your response.<br><br>Please try again in a moment or contact the practice directly."
 
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{cfg['title']} — SwiftSlot</title><style>*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0;}}body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased;}}.card{{background:#ffffff;border-radius:24px;padding:52px 44px 40px;max-width:460px;width:100%;text-align:center;box-shadow:0 0 0 1px rgba(0,0,0,0.04),0 4px 6px rgba(0,0,0,0.04),0 16px 40px rgba(0,0,0,0.07);}}.badge{{width:68px;height:68px;background:{cfg['badge_bg']};border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:28px;line-height:1;}}h1{{font-size:20px;font-weight:700;color:#0f172a;letter-spacing:-0.3px;margin-bottom:6px;}}.state-label{{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{cfg['accent']};background:{cfg['badge_bg']};padding:4px 10px;border-radius:20px;margin-bottom:28px;letter-spacing:0.2px;}}.state-dot{{width:6px;height:6px;background:{cfg['accent']};border-radius:50%;flex-shrink:0;}}.divider{{height:1px;background:#f1f5f9;margin:0 0 24px;}}.body{{font-size:14px;color:#475569;line-height:1.75;}}.footer{{margin-top:32px;padding-top:20px;border-top:1px solid #f1f5f9;font-size:11px;font-weight:700;color:#cbd5e1;letter-spacing:1.2px;text-transform:uppercase;}}</style></head><body><div class="card"><div class="badge">{cfg['emoji']}</div><h1>{cfg['title']}</h1><div class="state-label"><span class="state-dot"></span>Response recorded</div><div class="divider"></div><p class="body">{body}</p><p class="footer">SwiftSlot</p></div></body></html>"""
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{cfg['title']} — {escaped_clinic_name}</title><style>*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0;}}body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased;}}.card{{background:#ffffff;border-radius:24px;padding:52px 44px 40px;max-width:460px;width:100%;text-align:center;box-shadow:0 0 0 1px rgba(0,0,0,0.04),0 4px 6px rgba(0,0,0,0.04),0 16px 40px rgba(0,0,0,0.07);}}.badge{{width:68px;height:68px;background:{cfg['badge_bg']};border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:28px;line-height:1;}}h1{{font-size:20px;font-weight:700;color:#0f172a;letter-spacing:-0.3px;margin-bottom:6px;}}.state-label{{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{cfg['accent']};background:{cfg['badge_bg']};padding:4px 10px;border-radius:20px;margin-bottom:28px;letter-spacing:0.2px;}}.state-dot{{width:6px;height:6px;background:{cfg['accent']};border-radius:50%;flex-shrink:0;}}.divider{{height:1px;background:#f1f5f9;margin:0 0 24px;}}.body{{font-size:14px;color:#475569;line-height:1.75;}}.footer{{margin-top:32px;padding-top:20px;border-top:1px solid #f1f5f9;font-size:11px;font-weight:700;color:#cbd5e1;letter-spacing:1.2px;text-transform:uppercase;}}</style></head><body><div class="card"><div class="badge">{cfg['emoji']}</div><h1>{cfg['title']}</h1><div class="state-label"><span class="state-dot"></span>Response recorded</div><div class="divider"></div><p class="body">{body}</p><p class="footer">{escaped_clinic_name}</p></div></body></html>"""
 
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
@@ -1418,6 +1631,56 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_patients_consent_status
         ON patients(consent_status);
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS display_name TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS contact_email TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS phone TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS sender_name TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS reply_to_email TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS default_slot_value_pence INTEGER NOT NULL DEFAULT 0;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS default_expiry_minutes INTEGER NOT NULL DEFAULT 240;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS gdpr_notice TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_clinics_updated_at
+        ON clinics(updated_at);
         """)
 
         await conn.execute(
@@ -1554,7 +1817,14 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
 async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferRequest, clinic_id: str) -> asyncpg.Record:
     slot_id = uuid.uuid4()
     clinic_uuid = uuid.UUID(str(clinic_id))
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    clinic_settings = await get_clinic_settings(pool, clinic_id)
+    expiry_minutes = clamp_expiry_minutes(safe_int(clinic_settings["default_expiry_minutes"], 240))
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiry_minutes)
+    slot_value_pence = (
+        request.slot_value_pence
+        if request.slot_value_pence > 0
+        else clinic_settings["default_slot_value_pence"]
+    )
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
@@ -1562,14 +1832,24 @@ async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferReque
                 id, clinic_id, slot_time, clinician, appointment_type, slot_value_pence, status, expires_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, 'broadcasting', $7)
-            RETURNING id::text, slot_time, clinician, status, accepted_by, locked_at, expires_at
+            RETURNING
+                id::text,
+                clinic_id::text,
+                slot_time,
+                clinician,
+                appointment_type,
+                slot_value_pence,
+                status,
+                accepted_by,
+                locked_at,
+                expires_at
             """,
             slot_id,
             clinic_uuid,
             request.slot_time,
             request.clinician,
             request.appointment_type,
-            request.slot_value_pence,
+            slot_value_pence,
             expires_at,
         )
 
@@ -1783,16 +2063,30 @@ async def notify_slot_update(pool: asyncpg.Pool, slot_id: uuid.UUID) -> None:
         logger.exception("Failed to notify dashboard listeners for slot %s", slot_id)
 
 
-async def send_waitlist_offer_emails(slot: asyncpg.Record, offers: list[asyncpg.Record]) -> None:
+async def send_waitlist_offer_emails(pool: asyncpg.Pool, slot: asyncpg.Record, offers: list[asyncpg.Record]) -> None:
     api_key = (resend.api_key or "").strip()
     if not api_key or api_key == "re_your_key_here":
         logger.error("Resend is not configured; skipping %s outbound waitlist emails.", len(offers))
         return
 
-    await asyncio.gather(*(send_offer_email_to_patient(slot, offer) for offer in offers))
+    try:
+        clinic_settings = await get_clinic_settings(pool, str(slot["clinic_id"]))
+    except Exception:
+        logger.exception("Failed to load clinic settings for waitlist offer emails.")
+        clinic_settings = {
+            "clinic_name": "Your clinic",
+            "reply_to_email": None,
+            "gdpr_notice": DEFAULT_GDPR_NOTICE,
+            "default_expiry_minutes": 240,
+        }
+
+    await asyncio.gather(
+        *(send_offer_email_to_patient(slot, offer, clinic_settings) for offer in offers),
+        return_exceptions=True,
+    )
 
 
-async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Record) -> None:
+async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Record, clinic_settings: dict) -> None:
     api_key = (resend.api_key or "").strip()
     recipient = str(offer["patient_email"])
     if not api_key or api_key == "re_your_key_here":
@@ -1800,44 +2094,73 @@ async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Recor
         return
 
     from_email = os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
+    clinic_name = clinic_settings["clinic_name"]
+    payload = {
+        "from": from_email,
+        "to": recipient,
+        "subject": f"Appointment available at {clinic_name}",
+        "html": build_offer_email_html(slot, offer, clinic_settings),
+    }
+    if clinic_settings.get("reply_to_email"):
+        payload["reply_to"] = clinic_settings["reply_to_email"]
 
     async with SMTP_SEMAPHORE:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: resend.Emails.send(
-                    {
-                        "from": from_email,
-                        "to": recipient,
-                        "subject": "Urgent Appointment Available at Smile Dental!",
-                        "html": build_offer_email_html(slot, offer),
-                    }
-                ),
+                lambda: resend.Emails.send(payload),
             )
         except Exception:
             logger.exception("Failed to send waitlist offer email to %s", recipient)
 
 
-def build_offer_email_html(slot: asyncpg.Record, offer: asyncpg.Record) -> str:
+def build_offer_email_html(slot: asyncpg.Record, offer: asyncpg.Record, clinic_settings: dict) -> str:
     offer_url = f"{settings.render_external_url}/offer/{generate_secure_token(str(offer['id']))}"
-    clinician = f" with {slot['clinician']}" if slot["clinician"] else ""
+    accept_url = f"{offer_url}#accept"
+    decline_url = f"{offer_url}#decline"
+    clinic_name = html.escape(clinic_settings["clinic_name"])
+    clinician = html.escape(slot["clinician"]) if slot["clinician"] else ""
+    try:
+        appointment_type_value = slot["appointment_type"]
+    except KeyError:
+        appointment_type_value = None
+    appointment_type = html.escape(appointment_type_value) if appointment_type_value else ""
     slot_time = slot["slot_time"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
+    expiry_text = "This offer is time-limited and may be withdrawn once it expires or another patient accepts it."
+    try:
+        expires_at_value = slot["expires_at"]
+    except KeyError:
+        expires_at_value = None
+    if expires_at_value:
+        expires_at = expires_at_value.astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
+        expiry_text = f"This offer expires on {html.escape(expires_at)}, unless another patient accepts it first."
+    gdpr_notice = html.escape(clinic_settings.get("gdpr_notice") or DEFAULT_GDPR_NOTICE)
 
     return f"""
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a;">
-      <h2 style="margin: 0 0 12px;">Urgent appointment available</h2>
-      <p>An appointment{clinician} is available on <strong>{slot_time}</strong>.</p>
+      <h2 style="margin: 0 0 12px;">Appointment available at {clinic_name}</h2>
+      <p>An appointment is available on <strong>{html.escape(slot_time)}</strong>.</p>
+      {f"<p><strong>Clinician:</strong> {clinician}</p>" if clinician else ""}
+      {f"<p><strong>Appointment type:</strong> {appointment_type}</p>" if appointment_type else ""}
       <p>Please open the secure offer page below to accept or decline. The first patient to accept locks the slot.</p>
+      <p style="font-size: 13px; color: #64748b;">{expiry_text}</p>
       <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 24px 0 12px;">
         <tr>
           <td style="border-radius: 8px; background: #0f766e;">
-            <a href="{offer_url}" target="_blank" style="display: inline-block; padding: 12px 18px; color: #ffffff; text-decoration: none; font-weight: 700; border-radius: 8px;">
-              View secure appointment offer
+            <a href="{accept_url}" target="_blank" style="display: inline-block; padding: 12px 18px; color: #ffffff; text-decoration: none; font-weight: 700; border-radius: 8px;">
+              Accept appointment
+            </a>
+          </td>
+          <td style="width: 10px;"></td>
+          <td style="border-radius: 8px; background: #f1f5f9;">
+            <a href="{decline_url}" target="_blank" style="display: inline-block; padding: 12px 18px; color: #334155; text-decoration: none; font-weight: 700; border-radius: 8px; border: 1px solid #cbd5e1;">
+              Decline offer
             </a>
           </td>
         </tr>
       </table>
       <p style="font-size: 13px; color: #64748b;">If the button does not work, copy and paste this link into your browser:<br>{offer_url}</p>
+      <p style="font-size: 12px; color: #64748b; margin-top: 24px;">{gdpr_notice}</p>
     </div>
     """

@@ -879,7 +879,7 @@ Logout
             <div class="step-circle">3</div>
             <div>
               <div class="step-name">Broadcast Action</div>
-              <div class="step-desc">Send a 4-hour time-limited offer to all listed patients</div>
+              <div class="step-desc" id="expiryStepText">Send a time-limited offer to all listed patients</div>
             </div>
           </div>
 
@@ -890,9 +890,10 @@ Logout
 
           <div class="gdpr">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <div class="gdpr-txt"><strong>UK GDPR Notice:</strong> Only contact patients with explicit prior consent. Do not reference clinical diagnosis, treatment history, or procedure type.</div>
+            <div class="gdpr-txt" id="gdprNotice"><strong>UK GDPR Notice:</strong> Only contact patients with explicit prior consent. Do not reference clinical diagnosis, treatment history, or procedure type.</div>
           </div>
 
+          <div class="f-hint" id="expiryHint" style="margin-bottom:8px">Offer expires after 240 minutes</div>
           <button class="btn-primary" id="broadcastBtn">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" id="btnIcon"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
             <span id="btnLabel">Send Offers to Waitlist</span>
@@ -962,6 +963,7 @@ var POLL_MS  = 8000;
 var MAX_TAGS = 10;
 var MAX_LOG  = 20;
 var OFFER_MS = 4 * 60 * 60 * 1000;
+var clinicSettings = null;
 
 /* ─── STATE ──────────────────────────────── */
 var S = {
@@ -1101,19 +1103,43 @@ setInterval(tick,1000); tick();
 
 /* ─── PRACTICE NAME ──────────────────────── */
 var pi=document.getElementById('practiceInput');
-pi.value=localStorage.getItem('ss_prac')||'';
 pi.addEventListener('input',function(){
   localStorage.setItem('ss_prac',this.value);
   var initials=(this.value||'R').trim().charAt(0).toUpperCase();
   setText('userAvatar', initials);
   setText('userName', this.value||'Receptionist');
 });
-// Init avatar
-(function(){
-  var v=pi.value||'';
+function applyPracticeName(value){
+  var v=value||'';
+  pi.value=v;
   setText('userAvatar', v?v.trim().charAt(0).toUpperCase():'R');
   setText('userName', v||'Receptionist');
-})();
+}
+applyPracticeName(localStorage.getItem('ss_prac')||'');
+
+function applyClinicSettings(data){
+  clinicSettings=data || {};
+  var clinicName=clinicSettings.clinic_name || '';
+  if(clinicName) applyPracticeName(clinicName);
+  var slotValue=document.getElementById('slotValue');
+  if(slotValue && !slotValue.value && Number(clinicSettings.default_slot_value_pence||0)>0){
+    slotValue.value=((Number(clinicSettings.default_slot_value_pence)/100).toFixed(2)).replace(/\.00$/,'');
+  }
+  var expiry=Number(clinicSettings.default_expiry_minutes||240);
+  if(!isFinite(expiry) || expiry<5) expiry=240;
+  OFFER_MS=expiry*60*1000;
+  setText('expiryHint','Offer expires after '+expiry+' minutes');
+  setText('expiryStepText','Send a '+expiry+'-minute time-limited offer to all listed patients');
+  var gdpr=document.getElementById('gdprNotice');
+  if(gdpr && clinicSettings.gdpr_notice){
+    gdpr.innerHTML='<strong>UK GDPR Notice:</strong> '+esc(clinicSettings.gdpr_notice);
+  }
+}
+
+fetch(API+'/api/clinic/settings')
+  .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(applyClinicSettings)
+  .catch(function(err){ addLog('WARN','Clinic settings unavailable: '+err.message); });
 
 /* ─── PREFILL SLOT TIME ──────────────────── */
 function prefillSlot(){
@@ -1367,7 +1393,7 @@ function renderExpired(){
         '<div style="font-size:28px;margin-bottom:10px">⏰</div>'+
         '<div class="confirm-t">Offer Window Expired</div>'+
         '<div class="confirm-s">'+esc(ft)+'</div>'+
-        '<p style="font-size:11px;color:var(--gray-400);line-height:1.6;margin:10px 0">No patient confirmed within the 4-hour window. The slot has been released.</p>'+
+        '<p style="font-size:11px;color:var(--gray-400);line-height:1.6;margin:10px 0">No patient confirmed within the configured offer window. The slot has been released.</p>'+
         '<button class="btn-act navy" id="expFreshBtn">Start New Broadcast</button>'+
       '</div>'+
     '</div>';
