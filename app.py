@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from models_auth import UserCreate, UserLogin, generate_uuid
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from security import hash_password, verify_password
 from starlette.middleware.sessions import SessionMiddleware
@@ -73,6 +73,8 @@ APPOINTMENT_TYPES = [
     "Other",
 ]
 PATIENT_LIFECYCLE_STATUSES = {"waitlist", "booked", "completed", "archived"}
+APPOINTMENT_STATUSES = {"booked", "completed", "cancelled", "no_show"}
+APPOINTMENT_SOURCES = {"manual", "recovered", "import", "integration"}
 
 
 def safe_int(value, default=0):
@@ -117,6 +119,22 @@ def normalize_lifecycle_status(value) -> str:
 
 def get_resend_from_email() -> str:
     return os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
+
+
+def normalize_appointment_status(value) -> str:
+    cleaned = clean_optional_string(value) or "booked"
+    cleaned = cleaned.lower()
+    if cleaned not in APPOINTMENT_STATUSES:
+        raise ValueError("status must be booked, completed, cancelled, or no_show")
+    return cleaned
+
+
+def normalize_appointment_source(value) -> str:
+    cleaned = clean_optional_string(value) or "manual"
+    cleaned = cleaned.lower()
+    if cleaned not in APPOINTMENT_SOURCES:
+        raise ValueError("source must be manual, recovered, import, or integration")
+    return cleaned
 
 
 def generate_secure_token(offer_id: str) -> str:
@@ -337,6 +355,61 @@ class SlotStatusResponse(BaseModel):
     offers: list[dict] = Field(default_factory=list)
 
 
+class AppointmentCreate(BaseModel):
+    patient_email: EmailStr
+    patient_name: str | None = None
+    patient_id: str | None = None
+    appointment_type: str | None = None
+    clinician: str | None = None
+    appointment_time: datetime
+    slot_value_pence: int = 0
+    notes: str | None = None
+    source: str = "manual"
+
+    @field_validator("appointment_time")
+    @classmethod
+    def normalize_appointment_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @field_validator("slot_value_pence")
+    @classmethod
+    def validate_slot_value(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("slot_value_pence cannot be negative")
+        return value
+
+
+class AppointmentUpdate(BaseModel):
+    appointment_type: str | None = None
+    clinician: str | None = None
+    appointment_time: datetime | None = None
+    slot_value_pence: int | None = None
+    notes: str | None = None
+    status: str | None = None
+
+    @field_validator("appointment_time")
+    @classmethod
+    def normalize_appointment_time(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @field_validator("slot_value_pence")
+    @classmethod
+    def validate_slot_value(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("slot_value_pence cannot be negative")
+        return value
+
+
+class AppointmentImportRows(BaseModel):
+    rows: list[dict] = Field(default_factory=list, max_length=500)
+
+
 async def log_clinical_event(
     pool: asyncpg.Pool,
     event_type: str,
@@ -449,6 +522,35 @@ def serialize_patient(row) -> dict:
     }
 
 
+def serialize_appointment(row) -> dict:
+    return {
+        "id": row["id"],
+        "patient_id": row["patient_id"],
+        "patient_email": row["patient_email"],
+        "patient_name": row["patient_name"],
+        "source": row["source"],
+        "appointment_type": row["appointment_type"],
+        "clinician": row["clinician"],
+        "appointment_time": iso_or_none(row["appointment_time"]),
+        "slot_value_pence": row["slot_value_pence"],
+        "status": row["status"],
+        "notes": row["notes"],
+        "completed_at": iso_or_none(row["completed_at"]),
+        "cancelled_at": iso_or_none(row["cancelled_at"]),
+        "no_show_at": iso_or_none(row["no_show_at"]),
+        "created_at": iso_or_none(row["created_at"]),
+        "updated_at": iso_or_none(row["updated_at"]),
+    }
+
+
+def split_patient_name(patient_name: str | None, email: str) -> tuple[str, str | None]:
+    cleaned = clean_optional_string(patient_name)
+    if not cleaned:
+        return email.split("@", 1)[0], None
+    parts = cleaned.split()
+    return parts[0], " ".join(parts[1:]) or None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.assert_startup_ready()
@@ -461,6 +563,7 @@ async def lifespan(app: FastAPI):
     async with pool.acquire() as conn:
         await conn.fetchval("SELECT 1")
     await ensure_schema(pool)
+    await backfill_recovered_appointments(pool)
     try:
         yield
     finally:
@@ -659,6 +762,335 @@ async def api_me(request: Request):
     }
 
 
+async def backfill_recovered_appointments(pool: asyncpg.Pool) -> None:
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    s.clinic_id, p.id AS patient_id, s.accepted_by,
+                    TRIM(CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, ''))) AS patient_name,
+                    s.id AS slot_id, s.appointment_type, s.clinician,
+                    s.slot_time, s.slot_value_pence
+                FROM waitlist_slots s
+                LEFT JOIN patients p
+                  ON p.clinic_id = s.clinic_id
+                 AND lower(p.email) = lower(s.accepted_by)
+                WHERE s.accepted_by IS NOT NULL
+                  AND (s.status = 'locked' OR s.accepted_by IS NOT NULL)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM appointments a WHERE a.slot_id = s.id
+                  );
+                """
+            )
+            values = [
+                (
+                    uuid.uuid4(),
+                    row["clinic_id"],
+                    row["patient_id"],
+                    row["accepted_by"],
+                    clean_optional_string(row["patient_name"]),
+                    row["slot_id"],
+                    row["appointment_type"],
+                    row["clinician"],
+                    row["slot_time"],
+                    row["slot_value_pence"],
+                )
+                for row in rows
+            ]
+            if values:
+                await conn.executemany(
+                    """
+                    INSERT INTO appointments (
+                        id, clinic_id, patient_id, patient_email, patient_name, slot_id,
+                        source, appointment_type, clinician, appointment_time,
+                        slot_value_pence, status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, 'recovered', $7, $8, $9, $10, 'booked')
+                    ON CONFLICT DO NOTHING
+                    """,
+                    values,
+                )
+    except Exception:
+        logger.exception("Failed to backfill recovered appointments")
+
+
+async def fetch_appointment(conn, appointment_id: uuid.UUID, clinic_id: uuid.UUID):
+    return await conn.fetchrow(
+        """
+        SELECT
+            a.id::text, a.patient_id::text, a.patient_email, a.patient_name,
+            a.source, a.appointment_type, a.clinician, a.appointment_time,
+            a.slot_value_pence, a.status, a.notes, a.completed_at,
+            a.cancelled_at, a.no_show_at, a.created_at, a.updated_at
+        FROM appointments a
+        WHERE a.id = $1 AND a.clinic_id = $2
+        """,
+        appointment_id,
+        clinic_id,
+    )
+
+
+async def sync_patient_lifecycle_for_appointment(
+    conn,
+    clinic_id: uuid.UUID,
+    patient_id: uuid.UUID | None,
+    status: str,
+    now: datetime,
+) -> None:
+    if not patient_id:
+        return
+    if status == "completed":
+        await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'completed',
+                completed_at = COALESCE(completed_at, $3),
+                archived_at = COALESCE(archived_at, $3),
+                updated_at = $3
+            WHERE id = $1 AND clinic_id = $2
+            """,
+            patient_id,
+            clinic_id,
+            now,
+        )
+    elif status == "booked":
+        await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'booked',
+                booked_at = COALESCE(booked_at, $3),
+                updated_at = $3
+            WHERE id = $1 AND clinic_id = $2 AND lifecycle_status <> 'completed'
+            """,
+            patient_id,
+            clinic_id,
+            now,
+        )
+    elif status in {"cancelled", "no_show"}:
+        await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'waitlist',
+                updated_at = $3
+            WHERE id = $1
+              AND clinic_id = $2
+              AND lifecycle_status = 'booked'
+              AND archived_at IS NULL
+            """,
+            patient_id,
+            clinic_id,
+            now,
+        )
+
+
+async def find_or_create_booked_patient(conn, clinic_id: uuid.UUID, appointment: AppointmentCreate) -> tuple[uuid.UUID, str, bool, bool]:
+    email = str(appointment.patient_email).lower().strip()
+    now = datetime.now(timezone.utc)
+    patient_id = None
+    created = False
+    updated = False
+    if appointment.patient_id:
+        try:
+            patient_id = uuid.UUID(appointment.patient_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid patient_id") from exc
+        patient = await conn.fetchrow(
+            "SELECT id FROM patients WHERE id = $1 AND clinic_id = $2",
+            patient_id,
+            clinic_id,
+        )
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+    else:
+        patient = await conn.fetchrow(
+            "SELECT id FROM patients WHERE clinic_id = $1 AND lower(email) = lower($2)",
+            clinic_id,
+            email,
+        )
+        if patient:
+            patient_id = patient["id"]
+
+    if patient_id is None:
+        first_name, last_name = split_patient_name(appointment.patient_name, email)
+        patient_id = uuid.uuid4()
+        await conn.execute(
+            """
+            INSERT INTO patients (
+                id, clinic_id, first_name, last_name, email, consent_status,
+                consent_source, lifecycle_status, booked_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'not_consented', 'appointment_import', 'booked', $6, $6, $6)
+            """,
+            patient_id,
+            clinic_id,
+            first_name,
+            last_name,
+            email,
+            now,
+        )
+        created = True
+    else:
+        await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'booked',
+                booked_at = COALESCE(booked_at, $3),
+                updated_at = $3
+            WHERE id = $1 AND clinic_id = $2 AND lifecycle_status <> 'completed'
+            """,
+            patient_id,
+            clinic_id,
+            now,
+        )
+        updated = True
+
+    return patient_id, email, created, updated
+
+
+async def create_appointment_record(
+    conn,
+    clinic_id: uuid.UUID,
+    appointment: AppointmentCreate,
+    source_override: str | None = None,
+) -> tuple[asyncpg.Record, bool, bool]:
+    try:
+        appointment_type = normalize_appointment_type(appointment.appointment_type)
+        source = normalize_appointment_source(source_override or appointment.source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    patient_id, email, created_patient, updated_patient = await find_or_create_booked_patient(conn, clinic_id, appointment)
+    now = datetime.now(timezone.utc)
+    row = await conn.fetchrow(
+        """
+        INSERT INTO appointments (
+            id, clinic_id, patient_id, patient_email, patient_name, source,
+            appointment_type, clinician, appointment_time, slot_value_pence,
+            status, notes, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'booked', $11, $12, $12)
+        RETURNING id::text, patient_id::text, patient_email, patient_name, source,
+                  appointment_type, clinician, appointment_time, slot_value_pence,
+                  status, notes, completed_at, cancelled_at, no_show_at,
+                  created_at, updated_at
+        """,
+        uuid.uuid4(),
+        clinic_id,
+        patient_id,
+        email,
+        clean_optional_string(appointment.patient_name),
+        source,
+        appointment_type,
+        clean_optional_string(appointment.clinician),
+        appointment.appointment_time,
+        appointment.slot_value_pence,
+        clean_optional_string(appointment.notes),
+        now,
+    )
+    return row, created_patient, updated_patient
+
+
+async def upsert_recovered_appointment_for_accept(conn, slot, offer, now: datetime) -> None:
+    patient = await conn.fetchrow(
+        """
+        SELECT id, TRIM(CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))) AS patient_name
+        FROM patients
+        WHERE clinic_id = $1 AND lower(email) = lower($2)
+        """,
+        slot["clinic_id"],
+        offer["patient_email"],
+    )
+    await conn.execute(
+        """
+        INSERT INTO appointments (
+            id, clinic_id, patient_id, patient_email, patient_name, slot_id,
+            source, appointment_type, clinician, appointment_time,
+            slot_value_pence, status, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'recovered', $7, $8, $9, $10, 'booked', $11, $11)
+        ON CONFLICT (slot_id) WHERE slot_id IS NOT NULL DO UPDATE
+        SET patient_id = EXCLUDED.patient_id,
+            patient_email = EXCLUDED.patient_email,
+            patient_name = EXCLUDED.patient_name,
+            source = 'recovered',
+            appointment_type = EXCLUDED.appointment_type,
+            clinician = EXCLUDED.clinician,
+            appointment_time = EXCLUDED.appointment_time,
+            slot_value_pence = EXCLUDED.slot_value_pence,
+            status = 'booked',
+            updated_at = EXCLUDED.updated_at
+        """,
+        uuid.uuid4(),
+        slot["clinic_id"],
+        patient["id"] if patient else None,
+        offer["patient_email"],
+        patient["patient_name"] if patient else None,
+        slot["id"],
+        slot["appointment_type"],
+        slot["clinician"],
+        slot["slot_time"],
+        slot["slot_value_pence"],
+        now,
+    )
+
+
+async def update_appointment_status(conn, clinic_id: uuid.UUID, appointment_id: uuid.UUID, status: str) -> asyncpg.Record:
+    try:
+        normalized_status = normalize_appointment_status(status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    timestamp_field = {
+        "completed": "completed_at",
+        "cancelled": "cancelled_at",
+        "no_show": "no_show_at",
+    }.get(normalized_status)
+    if timestamp_field:
+        row = await conn.fetchrow(
+            f"""
+            UPDATE appointments
+            SET status = $3,
+                {timestamp_field} = COALESCE({timestamp_field}, $4),
+                updated_at = $4
+            WHERE id = $1 AND clinic_id = $2
+            RETURNING id::text, patient_id::text, patient_email, patient_name, source,
+                      appointment_type, clinician, appointment_time, slot_value_pence,
+                      status, notes, completed_at, cancelled_at, no_show_at,
+                      created_at, updated_at
+            """,
+            appointment_id,
+            clinic_id,
+            normalized_status,
+            now,
+        )
+    else:
+        row = await conn.fetchrow(
+            """
+            UPDATE appointments
+            SET status = $3, updated_at = $4
+            WHERE id = $1 AND clinic_id = $2
+            RETURNING id::text, patient_id::text, patient_email, patient_name, source,
+                      appointment_type, clinician, appointment_time, slot_value_pence,
+                      status, notes, completed_at, cancelled_at, no_show_at,
+                      created_at, updated_at
+            """,
+            appointment_id,
+            clinic_id,
+            normalized_status,
+            now,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    await sync_patient_lifecycle_for_appointment(
+        conn,
+        clinic_id,
+        uuid.UUID(row["patient_id"]) if row["patient_id"] else None,
+        normalized_status,
+        now,
+    )
+    return row
+
+
 @app.post("/broadcast", response_model=BroadcastResponse)
 async def broadcast(
     request: DashboardOfferRequest,
@@ -771,6 +1203,254 @@ async def api_broadcasts(request: Request):
     return broadcasts
 
 
+@app.get("/api/appointments")
+async def api_appointments(
+    request: Request,
+    status: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    limit: int = 100,
+):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    status_filter = None
+    if status is not None:
+        try:
+            status_filter = normalize_appointment_status(status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    max_limit = max(1, min(safe_int(limit, 100), 500))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                a.id::text, a.patient_id::text, a.patient_email, a.patient_name,
+                a.source, a.appointment_type, a.clinician, a.appointment_time,
+                a.slot_value_pence, a.status, a.notes, a.completed_at,
+                a.cancelled_at, a.no_show_at, a.created_at, a.updated_at
+            FROM appointments a
+            WHERE a.clinic_id = $1
+              AND ($2::text IS NULL OR a.status = $2)
+              AND ($3::timestamptz IS NULL OR a.appointment_time >= $3)
+              AND ($4::timestamptz IS NULL OR a.appointment_time <= $4)
+            ORDER BY a.appointment_time ASC
+            LIMIT $5;
+            """,
+            clinic_uuid,
+            status_filter,
+            from_date,
+            to_date,
+            max_limit,
+        )
+    return [serialize_appointment(row) for row in rows]
+
+
+@app.post("/api/appointments")
+async def api_create_appointment(request: Request, appointment: AppointmentCreate):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            row, _, _ = await create_appointment_record(conn, clinic_uuid, appointment)
+    await log_clinical_event(
+        request.app.state.pool,
+        "appointment_created",
+        clinic_id=str(clinic_uuid),
+        details={"appointment_id": row["id"], "source": row["source"]},
+    )
+    return serialize_appointment(row)
+
+
+@app.patch("/api/appointments/{appointment_id}")
+async def api_update_appointment(appointment_id: str, update: AppointmentUpdate, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        appointment_uuid = uuid.UUID(appointment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Appointment not found") from exc
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    payload = update.model_dump(exclude_unset=True)
+    if "appointment_type" in payload:
+        try:
+            payload["appointment_type"] = normalize_appointment_type(payload.get("appointment_type"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "status" in payload and payload.get("status") is not None:
+        try:
+            payload["status"] = normalize_appointment_status(payload.get("status"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            if payload.get("status"):
+                await update_appointment_status(conn, clinic_uuid, appointment_uuid, payload.pop("status"))
+            fields = [
+                field
+                for field in ["appointment_type", "clinician", "appointment_time", "slot_value_pence", "notes"]
+                if field in payload
+            ]
+            if fields:
+                assignments = []
+                values = []
+                for index, field in enumerate(fields, start=1):
+                    value = payload.get(field)
+                    if field in {"clinician", "notes"}:
+                        value = clean_optional_string(value)
+                    assignments.append(f"{field} = ${index}")
+                    values.append(value)
+                assignments.append("updated_at = now()")
+                values.extend([appointment_uuid, clinic_uuid])
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE appointments
+                    SET {", ".join(assignments)}
+                    WHERE id = ${len(values) - 1} AND clinic_id = ${len(values)}
+                    RETURNING id::text, patient_id::text, patient_email, patient_name, source,
+                              appointment_type, clinician, appointment_time, slot_value_pence,
+                              status, notes, completed_at, cancelled_at, no_show_at,
+                              created_at, updated_at
+                    """,
+                    *values,
+                )
+            else:
+                row = await fetch_appointment(conn, appointment_uuid, clinic_uuid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    await log_clinical_event(
+        request.app.state.pool,
+        "appointment_updated",
+        clinic_id=str(clinic_uuid),
+        details={"appointment_id": appointment_id, "fields": sorted(update.model_fields_set)},
+    )
+    if update.status in {"completed", "cancelled", "no_show"}:
+        await log_clinical_event(
+            request.app.state.pool,
+            {
+                "completed": "appointment_completed",
+                "cancelled": "appointment_cancelled",
+                "no_show": "appointment_no_show",
+            }[update.status],
+            clinic_id=str(clinic_uuid),
+            details={"appointment_id": appointment_id},
+        )
+    return serialize_appointment(row)
+
+
+async def _appointment_status_endpoint(request: Request, appointment_id: str, status: str, event_type: str):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        appointment_uuid = uuid.UUID(appointment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Appointment not found") from exc
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            row = await update_appointment_status(conn, clinic_uuid, appointment_uuid, status)
+    await log_clinical_event(
+        request.app.state.pool,
+        event_type,
+        clinic_id=str(clinic_uuid),
+        details={"appointment_id": appointment_id},
+    )
+    return serialize_appointment(row)
+
+
+@app.post("/api/appointments/{appointment_id}/complete")
+async def api_complete_appointment(appointment_id: str, request: Request):
+    return await _appointment_status_endpoint(request, appointment_id, "completed", "appointment_completed")
+
+
+@app.post("/api/appointments/{appointment_id}/cancel")
+async def api_cancel_appointment(appointment_id: str, request: Request):
+    return await _appointment_status_endpoint(request, appointment_id, "cancelled", "appointment_cancelled")
+
+
+@app.post("/api/appointments/{appointment_id}/no-show")
+async def api_no_show_appointment(appointment_id: str, request: Request):
+    return await _appointment_status_endpoint(request, appointment_id, "no_show", "appointment_no_show")
+
+
+def validate_import_rows(rows: list[dict]) -> tuple[list[tuple[int, AppointmentCreate]], list[dict]]:
+    valid = []
+    invalid = []
+    for index, row in enumerate(rows):
+        try:
+            appointment = AppointmentCreate(**row)
+            normalize_appointment_type(appointment.appointment_type)
+            normalize_appointment_source(appointment.source)
+            if appointment.slot_value_pence < 0:
+                raise ValueError("slot_value_pence cannot be negative")
+            valid.append((index, appointment))
+        except (ValidationError, ValueError) as exc:
+            invalid.append({"index": index, "reason": str(exc), "row": row})
+    return valid, invalid
+
+
+@app.post("/api/appointments/import-preview")
+async def api_appointment_import_preview(payload: AppointmentImportRows, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    valid, invalid = validate_import_rows(payload.rows)
+    return {
+        "valid_rows": [row.model_dump(mode="json") for _, row in valid],
+        "invalid_rows": invalid,
+        "summary": {"valid": len(valid), "invalid": len(invalid), "total": len(payload.rows)},
+    }
+
+
+@app.post("/api/appointments/import-commit")
+async def api_appointment_import_commit(payload: AppointmentImportRows, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    valid, invalid = validate_import_rows(payload.rows)
+    created_appointments = 0
+    created_patients = 0
+    updated_patients = 0
+    errors = list(invalid)
+    async with request.app.state.pool.acquire() as conn:
+        for index, row in valid:
+            try:
+                async with conn.transaction():
+                    created_row, created_patient, updated_patient = await create_appointment_record(
+                        conn,
+                        clinic_uuid,
+                        row,
+                        source_override="import",
+                    )
+                    created_appointments += 1
+                    created_patients += 1 if created_patient else 0
+                    updated_patients += 1 if updated_patient and not created_patient else 0
+            except Exception as exc:
+                errors.append({"index": index, "reason": str(exc), "row": row.model_dump(mode="json")})
+    await log_clinical_event(
+        request.app.state.pool,
+        "appointment_imported",
+        clinic_id=str(clinic_uuid),
+        details={"created_appointments": created_appointments, "errors": len(errors)},
+    )
+    return {
+        "created_appointments": created_appointments,
+        "created_patients": created_patients,
+        "updated_patients": updated_patients,
+        "errors": errors,
+    }
+
+
 @app.get("/api/appointments/recovered")
 async def api_recovered_appointments(request: Request):
     auth_redirect = require_auth(request)
@@ -781,24 +1461,18 @@ async def api_recovered_appointments(request: Request):
     async with request.app.state.pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT
-                id::text AS id,
-                accepted_by AS patient,
-                slot_time,
-                clinician,
-                appointment_type,
-                slot_value_pence,
-                status,
-                locked_at AS confirmed_at
-            FROM waitlist_slots
+            SELECT id::text, patient_email AS patient, appointment_time AS slot_time,
+                   clinician, appointment_type, slot_value_pence, status,
+                   created_at AS confirmed_at
+            FROM appointments
             WHERE clinic_id = $1
-              AND (status = 'locked' OR accepted_by IS NOT NULL)
-            ORDER BY locked_at DESC NULLS LAST, created_at DESC
+              AND source = 'recovered'
+              AND status IN ('booked', 'completed')
+            ORDER BY appointment_time DESC
             LIMIT 100;
             """,
             clinic_uuid,
         )
-
     return [
         {
             "id": row["id"],
@@ -863,6 +1537,19 @@ async def api_analytics_summary(request: Request):
             """,
             clinic_uuid,
         )
+        appointment_summary = await conn.fetchrow(
+            """
+            SELECT
+                (COUNT(*) FILTER (WHERE status = 'booked'))::int AS booked_appointments,
+                (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_appointments,
+                (COUNT(*) FILTER (WHERE status = 'cancelled'))::int AS cancelled_appointments,
+                (COUNT(*) FILTER (WHERE status = 'no_show'))::int AS no_show_appointments,
+                COALESCE(SUM(slot_value_pence) FILTER (WHERE status = 'completed'), 0)::int AS total_completed_revenue_pence
+            FROM appointments
+            WHERE clinic_id = $1;
+            """,
+            clinic_uuid,
+        )
 
     total_broadcasts = slot_summary["total_broadcasts"] if slot_summary else 0
     slots_recovered = slot_summary["slots_recovered"] if slot_summary else 0
@@ -883,6 +1570,11 @@ async def api_analytics_summary(request: Request):
         "total_revenue_saved_pence": slot_summary["total_revenue_saved_pence"] if slot_summary else 0,
         "total_revenue_at_risk_pence": slot_summary["total_revenue_at_risk_pence"] if slot_summary else 0,
         "average_recovered_slot_value_pence": round(avg_recovered_value) if avg_recovered_value is not None else None,
+        "booked_appointments": appointment_summary["booked_appointments"] if appointment_summary else 0,
+        "completed_appointments": appointment_summary["completed_appointments"] if appointment_summary else 0,
+        "cancelled_appointments": appointment_summary["cancelled_appointments"] if appointment_summary else 0,
+        "no_show_appointments": appointment_summary["no_show_appointments"] if appointment_summary else 0,
+        "total_completed_revenue_pence": appointment_summary["total_completed_revenue_pence"] if appointment_summary else 0,
         "top_clinicians": [
             {"clinician": row["clinician"], "recovered": row["recovered"]}
             for row in top_rows
@@ -1540,7 +2232,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
 
             slot = await conn.fetchrow(
                 """
-                SELECT id, clinic_id, slot_time, clinician, status, accepted_by
+                SELECT id, clinic_id, slot_time, clinician, appointment_type, slot_value_pence, status, accepted_by
                 FROM waitlist_slots
                 WHERE id = $1
                 FOR UPDATE
@@ -1624,6 +2316,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                 offer["patient_email"],
                 now,
             )
+            await upsert_recovered_appointment_for_accept(conn, slot, offer, now)
 
     background_tasks.add_task(
         log_clinical_event,
@@ -2285,10 +2978,59 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         )
         await conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS appointments (
+                id UUID PRIMARY KEY,
+                clinic_id UUID NOT NULL REFERENCES clinics(id),
+                patient_id UUID REFERENCES patients(id),
+                patient_email TEXT NOT NULL,
+                patient_name TEXT,
+                slot_id UUID REFERENCES waitlist_slots(id),
+                source TEXT NOT NULL DEFAULT 'manual',
+                appointment_type TEXT,
+                clinician TEXT,
+                appointment_time TIMESTAMPTZ NOT NULL,
+                slot_value_pence INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'booked',
+                notes TEXT,
+                completed_at TIMESTAMPTZ,
+                cancelled_at TIMESTAMPTZ,
+                no_show_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        await conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_waitlist_offers_slot_id
             ON waitlist_offers(slot_id)
             """
         )
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_appointments_clinic_time
+        ON appointments(clinic_id, appointment_time);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_appointments_clinic_status
+        ON appointments(clinic_id, status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_appointments_patient_id
+        ON appointments(patient_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_appointments_slot_id
+        ON appointments(slot_id);
+        """)
+
+        await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_unique_slot
+        ON appointments(slot_id)
+        WHERE slot_id IS NOT NULL;
+        """)
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS audit_log (

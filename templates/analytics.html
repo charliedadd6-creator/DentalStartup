@@ -135,6 +135,18 @@
                         <span class="stat-label">Avg Recovered Slot Value</span>
                         <span class="stat-value" id="avgRecoveredValue">—</span>
                     </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Booked Appointments</span>
+                        <span class="stat-value" id="bookedAppointments">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Completed Appointments</span>
+                        <span class="stat-value" id="completedAppointments">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Cancelled / No-show</span>
+                        <span class="stat-value" id="missedAppointments">0</span>
+                    </div>
                 </div>
             </div>
             <div class="panel">
@@ -210,6 +222,9 @@
       setText('breakdownPending', data.pending_offers || 0);
       setText('revenueAtRisk', money(data.total_revenue_at_risk_pence || 0));
       setText('avgRecoveredValue', data.average_recovered_slot_value_pence == null ? '—' : money(data.average_recovered_slot_value_pence));
+      setText('bookedAppointments', data.booked_appointments || 0);
+      setText('completedAppointments', data.completed_appointments || 0);
+      setText('missedAppointments', (data.cancelled_appointments || 0)+' / '+(data.no_show_appointments || 0));
 
       var top=byId('topClinicians');
       if(!top) return;

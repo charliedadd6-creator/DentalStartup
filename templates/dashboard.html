@@ -1690,7 +1690,7 @@ function renderSmartQueue(){
     return;
   }
   if(!smartRecommendations.length){
-    list.innerHTML='<div class="picker-empty">No consented waitlist patients match yet. Recommendations are based on consent, priority, preferences, and response history.</div>';
+    list.innerHTML='<div class="picker-empty">No consented waitlist patients match yet. All matching patients may already be booked or inactive. Recommendations are based on consent, priority, preferences, and response history.</div>';
     return;
   }
   smartRecommendations.forEach(function(patient){

@@ -249,7 +249,7 @@
     return {1:'1 Urgent',2:'2 High',3:'3 Normal',4:'4 Low',5:'5 Very Low'}[Number(value)] || '3 Normal';
   }
   function lifecycleLabel(value){
-    return {waitlist:'Waitlist',booked:'Booked',completed:'Completed',archived:'Archived'}[value] || 'Waitlist';
+    return {waitlist:'Active',booked:'Booked',completed:'Completed',archived:'Archived'}[value] || 'Active';
   }
   function populateAppointmentTypes(types){
     var select=byId('preferredAppointmentType');
@@ -307,7 +307,7 @@
             '<td><span class="chip chip-gray">'+esc(priorityLabel(p.priority))+'</span></td>'+
             '<td>'+esc(p.preferred_appointment_type)+'</td>'+
             '<td>'+esc(p.preferred_clinician)+'</td>'+
-            '<td><span class="chip chip-gray">'+esc(lifecycleLabel(p.lifecycle_status))+'</span></td>'+
+            '<td><span class="chip '+(p.lifecycle_status==='waitlist'?'chip-green':'chip-gray')+'">'+esc(lifecycleLabel(p.lifecycle_status))+'</span></td>'+
             '<td>'+esc(p.offer_count || 0)+'</td>'+
             '<td>'+esc(p.accepted_count || 0)+'</td>'+
             '<td>'+esc(p.declined_count || 0)+'</td>'+
