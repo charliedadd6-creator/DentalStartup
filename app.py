@@ -75,6 +75,17 @@ def clamp_expiry_minutes(value: int) -> int:
     return max(5, min(value, 1440))
 
 
+def clamp_patient_priority(value: int) -> int:
+    return max(1, min(safe_int(value, 3), 5))
+
+
+def clean_optional_string(value):
+    if value is None:
+        return None
+    trimmed = str(value).strip()
+    return trimmed or None
+
+
 def generate_secure_token(offer_id: str) -> str:
     timestamp = int(time.time())
     payload = f"{offer_id}:{timestamp}".encode("utf-8")
@@ -219,6 +230,55 @@ class PatientCreate(BaseModel):
     phone: str | None = None
     consent_status: str = "consented"
     notes: str | None = None
+    priority: int = 3
+    preferred_appointment_type: str | None = None
+    preferred_clinician: str | None = None
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, value: int) -> int:
+        return clamp_patient_priority(value)
+
+
+class PatientUpdate(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    email: EmailStr | None = None
+    phone: str | None = None
+    consent_status: str | None = None
+    notes: str | None = None
+    priority: int | None = None
+    preferred_appointment_type: str | None = None
+    preferred_clinician: str | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_optional_email(cls, value):
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator(
+        "first_name",
+        "last_name",
+        "phone",
+        "consent_status",
+        "notes",
+        "preferred_appointment_type",
+        "preferred_clinician",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_patient_string(cls, value):
+        return clean_optional_string(value)
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return clamp_patient_priority(value)
 
 
 class BroadcastResponse(BaseModel):
@@ -319,6 +379,31 @@ async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
         "default_slot_value_pence": max(0, safe_int(row["default_slot_value_pence"], 0)),
         "default_expiry_minutes": default_expiry,
         "gdpr_notice": row["gdpr_notice"] or DEFAULT_GDPR_NOTICE,
+    }
+
+
+def serialize_patient(row) -> dict:
+    return {
+        "id": row["id"],
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "email": row["email"],
+        "phone": row["phone"],
+        "consent_status": row["consent_status"],
+        "consent_source": row["consent_source"],
+        "consented_at": iso_or_none(row["consented_at"]),
+        "notes": row["notes"],
+        "priority": row["priority"],
+        "preferred_appointment_type": row["preferred_appointment_type"],
+        "preferred_clinician": row["preferred_clinician"],
+        "last_contacted_at": iso_or_none(row["last_contacted_at"]),
+        "last_response_at": iso_or_none(row["last_response_at"]),
+        "accepted_count": row["accepted_count"],
+        "declined_count": row["declined_count"],
+        "offer_count": row["offer_count"],
+        "archived_at": iso_or_none(row["archived_at"]),
+        "created_at": iso_or_none(row["created_at"]),
+        "updated_at": iso_or_none(row["updated_at"]),
     }
 
 
@@ -757,7 +842,7 @@ async def api_analytics_summary(request: Request):
 
 
 @app.get("/api/patients")
-async def api_patients(request: Request):
+async def api_patients(request: Request, include_archived: bool = False):
     auth_redirect = require_auth(request)
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -767,30 +852,20 @@ async def api_patients(request: Request):
         rows = await conn.fetch(
             """
             SELECT id::text, first_name, last_name, email, phone, consent_status,
-                   consent_source, consented_at, notes, created_at, updated_at
+                   consent_source, consented_at, notes, priority, preferred_appointment_type,
+                   preferred_clinician, last_contacted_at, last_response_at,
+                   accepted_count, declined_count, offer_count, archived_at,
+                   created_at, updated_at
             FROM patients
             WHERE clinic_id = $1
+              AND ($2::boolean OR archived_at IS NULL)
             ORDER BY created_at DESC;
             """,
             clinic_uuid,
+            include_archived,
         )
 
-    patients = [
-        {
-            "id": row["id"],
-            "first_name": row["first_name"],
-            "last_name": row["last_name"],
-            "email": row["email"],
-            "phone": row["phone"],
-            "consent_status": row["consent_status"],
-            "consent_source": row["consent_source"],
-            "consented_at": iso_or_none(row["consented_at"]),
-            "notes": row["notes"],
-            "created_at": iso_or_none(row["created_at"]),
-            "updated_at": iso_or_none(row["updated_at"]),
-        }
-        for row in rows
-    ]
+    patients = [serialize_patient(row) for row in rows]
     return {
         "patients": patients,
         "total": len(patients),
@@ -808,6 +883,8 @@ async def api_create_patient(request: Request, patient: PatientCreate):
     patient_id = uuid.uuid4()
     email = str(patient.email).lower().strip()
     consented_at = datetime.now(timezone.utc) if patient.consent_status == "consented" else None
+    preferred_appointment_type = clean_optional_string(patient.preferred_appointment_type)
+    preferred_clinician = clean_optional_string(patient.preferred_clinician)
 
     try:
         async with request.app.state.pool.acquire() as conn:
@@ -815,38 +892,252 @@ async def api_create_patient(request: Request, patient: PatientCreate):
                 """
                 INSERT INTO patients (
                     id, clinic_id, first_name, last_name, email, phone,
-                    consent_status, consent_source, consented_at, notes
+                    consent_status, consent_source, consented_at, notes,
+                    priority, preferred_appointment_type, preferred_clinician
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual', $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual', $8, $9, $10, $11, $12)
                 RETURNING id::text, first_name, last_name, email, phone, consent_status,
-                          consent_source, consented_at, notes, created_at, updated_at;
+                          consent_source, consented_at, notes, priority,
+                          preferred_appointment_type, preferred_clinician,
+                          last_contacted_at, last_response_at, accepted_count,
+                          declined_count, offer_count, archived_at, created_at, updated_at;
                 """,
                 patient_id,
                 clinic_uuid,
                 patient.first_name.strip(),
-                patient.last_name.strip() if patient.last_name else None,
+                clean_optional_string(patient.last_name),
                 email,
-                patient.phone.strip() if patient.phone else None,
+                clean_optional_string(patient.phone),
                 patient.consent_status,
                 consented_at,
-                patient.notes,
+                clean_optional_string(patient.notes),
+                patient.priority,
+                preferred_appointment_type,
+                preferred_clinician,
             )
     except asyncpg.UniqueViolationError:
         return JSONResponse({"error": "Patient already exists on this waitlist"}, status_code=400)
 
-    return {
-        "id": row["id"],
-        "first_name": row["first_name"],
-        "last_name": row["last_name"],
-        "email": row["email"],
-        "phone": row["phone"],
-        "consent_status": row["consent_status"],
-        "consent_source": row["consent_source"],
-        "consented_at": iso_or_none(row["consented_at"]),
-        "notes": row["notes"],
-        "created_at": iso_or_none(row["created_at"]),
-        "updated_at": iso_or_none(row["updated_at"]),
+    return serialize_patient(row)
+
+
+@app.patch("/api/patients/{patient_id}")
+async def api_update_patient(patient_id: str, update: PatientUpdate, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        patient_uuid = uuid.UUID(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    payload = update.model_dump(exclude_unset=True)
+    allowed_fields = {
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "consent_status",
+        "notes",
+        "priority",
+        "preferred_appointment_type",
+        "preferred_clinician",
     }
+    fields = [field for field in update.model_fields_set if field in allowed_fields]
+    if "first_name" in fields and payload.get("first_name") is None:
+        raise HTTPException(status_code=400, detail="first_name cannot be empty")
+
+    if not fields:
+        async with request.app.state.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, first_name, last_name, email, phone, consent_status,
+                       consent_source, consented_at, notes, priority, preferred_appointment_type,
+                       preferred_clinician, last_contacted_at, last_response_at,
+                       accepted_count, declined_count, offer_count, archived_at,
+                       created_at, updated_at
+                FROM patients
+                WHERE id = $1 AND clinic_id = $2 AND archived_at IS NULL
+                """,
+                patient_uuid,
+                clinic_uuid,
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        return serialize_patient(row)
+
+    assignments = []
+    values = []
+    for index, field in enumerate(fields, start=1):
+        value = payload.get(field)
+        if field == "email" and value is not None:
+            value = str(value).lower().strip()
+        elif field in {
+            "first_name",
+            "last_name",
+            "phone",
+            "consent_status",
+            "notes",
+            "preferred_appointment_type",
+            "preferred_clinician",
+        }:
+            value = clean_optional_string(value)
+        assignments.append(f"{field} = ${index}")
+        values.append(value)
+
+    if "consent_status" in fields and payload.get("consent_status") == "consented":
+        assignments.append("consented_at = COALESCE(consented_at, now())")
+    assignments.append("updated_at = now()")
+    values.extend([patient_uuid, clinic_uuid])
+
+    try:
+        async with request.app.state.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                UPDATE patients
+                SET {", ".join(assignments)}
+                WHERE id = ${len(values) - 1}
+                  AND clinic_id = ${len(values)}
+                  AND archived_at IS NULL
+                RETURNING id::text, first_name, last_name, email, phone, consent_status,
+                          consent_source, consented_at, notes, priority,
+                          preferred_appointment_type, preferred_clinician,
+                          last_contacted_at, last_response_at, accepted_count,
+                          declined_count, offer_count, archived_at, created_at, updated_at;
+                """,
+                *values,
+            )
+    except asyncpg.UniqueViolationError:
+        return JSONResponse({"error": "Patient already exists on this waitlist"}, status_code=400)
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return serialize_patient(row)
+
+
+@app.post("/api/patients/{patient_id}/archive")
+async def api_archive_patient(patient_id: str, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        patient_uuid = uuid.UUID(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE patients
+            SET archived_at = now(), updated_at = now()
+            WHERE id = $1 AND clinic_id = $2 AND archived_at IS NULL
+            """,
+            patient_uuid,
+            clinic_uuid,
+        )
+    if result.endswith(" 0"):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return {"status": "archived"}
+
+
+@app.get("/api/recovery/recommendations")
+async def api_recovery_recommendations(
+    request: Request,
+    appointment_type: str | None = None,
+    clinician: str | None = None,
+    limit: int = 10,
+):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    appointment_type_norm = clean_optional_string(appointment_type)
+    clinician_norm = clean_optional_string(clinician)
+    max_limit = max(1, min(safe_int(limit, 10), 50))
+    now = datetime.now(timezone.utc)
+
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, first_name, last_name, email, phone, priority,
+                   preferred_appointment_type, preferred_clinician,
+                   last_contacted_at, last_response_at, accepted_count,
+                   declined_count, offer_count
+            FROM patients
+            WHERE clinic_id = $1
+              AND consent_status = 'consented'
+              AND archived_at IS NULL
+            """,
+            clinic_uuid,
+        )
+
+    recommendations = []
+    for row in rows:
+        score = 100
+        priority = clamp_patient_priority(row["priority"])
+        accepted_count = safe_int(row["accepted_count"], 0)
+        declined_count = safe_int(row["declined_count"], 0)
+        offer_count = safe_int(row["offer_count"], 0)
+        score -= priority * 8
+        score += accepted_count * 12
+        score -= declined_count * 4
+        score -= offer_count
+        reason_labels = []
+
+        if priority <= 2:
+            reason_labels.append("High priority")
+        if appointment_type_norm and row["preferred_appointment_type"]:
+            if row["preferred_appointment_type"].strip().lower() == appointment_type_norm.lower():
+                score += 15
+                reason_labels.append("Matches appointment type")
+        if clinician_norm and row["preferred_clinician"]:
+            if row["preferred_clinician"].strip().lower() == clinician_norm.lower():
+                score += 10
+                reason_labels.append("Matches clinician")
+        if accepted_count > 0:
+            reason_labels.append("Accepted before")
+        if accepted_count == 0 and declined_count == 0:
+            reason_labels.append("No response history")
+
+        last_contacted_at = row["last_contacted_at"]
+        if last_contacted_at:
+            if last_contacted_at.tzinfo is None:
+                last_contacted_at = last_contacted_at.replace(tzinfo=timezone.utc)
+            age = now - last_contacted_at
+            if age <= timedelta(hours=24):
+                score -= 25
+                reason_labels.append("Recently contacted")
+            elif age <= timedelta(days=7):
+                score -= 10
+                reason_labels.append("Recently contacted")
+
+        recommendations.append(
+            {
+                "id": row["id"],
+                "first_name": row["first_name"],
+                "last_name": row["last_name"],
+                "email": row["email"],
+                "phone": row["phone"],
+                "priority": priority,
+                "preferred_appointment_type": row["preferred_appointment_type"],
+                "preferred_clinician": row["preferred_clinician"],
+                "accepted_count": accepted_count,
+                "declined_count": declined_count,
+                "offer_count": offer_count,
+                "last_contacted_at": iso_or_none(row["last_contacted_at"]),
+                "last_response_at": iso_or_none(row["last_response_at"]),
+                "score": score,
+                "reason_labels": reason_labels,
+            }
+        )
+
+    recommendations.sort(key=lambda item: item["score"], reverse=True)
+    return {"recommendations": recommendations[:max_limit]}
 
 
 @app.get("/slot-status/{slot_id}", response_model=SlotStatusResponse)
@@ -1151,6 +1442,20 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                 offer["id"],
                 slot["clinic_id"],
             )
+            await conn.execute(
+                """
+                UPDATE patients
+                SET accepted_count = accepted_count + 1,
+                    last_response_at = $3,
+                    updated_at = $3
+                WHERE clinic_id = $1
+                  AND lower(email) = lower($2)
+                  AND archived_at IS NULL
+                """,
+                slot["clinic_id"],
+                offer["patient_email"],
+                now,
+            )
 
     background_tasks.add_task(
         log_clinical_event,
@@ -1441,6 +1746,23 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
     if result is None:
         return HTMLResponse(content=_html_decline_page("already_declined", existing["slot_time"], existing["clinician"], 0, clinic_name), status_code=200)
 
+    if result.get("clinic_id"):
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE patients
+                SET declined_count = declined_count + 1,
+                    last_response_at = $3,
+                    updated_at = $3
+                WHERE clinic_id = $1
+                  AND lower(email) = lower($2)
+                  AND archived_at IS NULL
+                """,
+                uuid.UUID(result["clinic_id"]),
+                result["patient_email"],
+                datetime.now(timezone.utc),
+            )
+
     background_tasks.add_task(
         log_clinical_event,
         pool,
@@ -1631,6 +1953,66 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_patients_consent_status
         ON patients(consent_status);
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 3;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS preferred_appointment_type TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS preferred_clinician TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS last_response_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS accepted_count INTEGER NOT NULL DEFAULT 0;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS declined_count INTEGER NOT NULL DEFAULT 0;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS offer_count INTEGER NOT NULL DEFAULT 0;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_clinic_priority
+        ON patients(clinic_id, priority);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_clinic_consent_archived
+        ON patients(clinic_id, consent_status, archived_at);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_last_contacted
+        ON patients(last_contacted_at);
         """)
 
         await conn.execute("""
@@ -1883,6 +2265,22 @@ async def create_waitlist_offers(
             VALUES ($1, $2, $3, $4, 'sent', $5)
             """,
             rows,
+        )
+        now = datetime.now(timezone.utc)
+        normalized_emails = [str(email).lower() for email in emails]
+        await conn.execute(
+            """
+            UPDATE patients
+            SET offer_count = offer_count + 1,
+                last_contacted_at = $3,
+                updated_at = $3
+            WHERE clinic_id = $1
+              AND lower(email) = ANY($2::text[])
+              AND archived_at IS NULL
+            """,
+            clinic_uuid,
+            normalized_emails,
+            now,
         )
         return await conn.fetch(
             """

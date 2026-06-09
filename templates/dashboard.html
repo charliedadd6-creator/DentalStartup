@@ -383,6 +383,32 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--gray-100);color:v
 .patient-chip-name{display:block;font-size:11px;font-weight:700;color:var(--gray-800);line-height:1.2}
 .patient-chip-email{display:block;font-size:10px;color:var(--gray-400);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}
 .picker-empty{font-size:11px;color:var(--gray-400);line-height:1.5}
+.smart-queue{
+  margin-top:12px;
+  border:1px solid var(--gray-200);
+  background:var(--white);
+  border-radius:10px;
+  padding:10px;
+}
+.smart-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.smart-title{font-size:11px;font-weight:800;color:var(--gray-800)}
+.smart-list{display:grid;gap:7px}
+.smart-card{
+  border:1px solid var(--gray-200);
+  background:var(--gray-50);
+  border-radius:8px;
+  padding:8px 9px;
+  cursor:pointer;
+  text-align:left;
+  font-family:'Inter',sans-serif;
+}
+.smart-card:hover{border-color:var(--teal-500);background:var(--teal-50)}
+.smart-main{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.smart-name{font-size:11px;font-weight:800;color:var(--gray-800)}
+.smart-score{font-size:10px;font-weight:800;color:var(--teal-500)}
+.smart-email{font-size:10px;color:var(--gray-400);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.smart-reasons{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.smart-reason{font-size:9px;font-weight:700;color:var(--gray-500);background:var(--white);border:1px solid var(--gray-200);border-radius:999px;padding:2px 6px}
 
 /* GDPR */
 .gdpr{
@@ -862,6 +888,15 @@ Logout
             <input class="tag-real" id="tagInput" type="text" placeholder="patient@example.com" autocomplete="off" autocapitalize="none" spellcheck="false">
           </div>
           <div class="r-hint">Invalid addresses rejected automatically · Max 10 patients per broadcast</div>
+          <div class="smart-queue">
+            <div class="smart-head">
+              <div class="smart-title">Smart Recovery Queue</div>
+              <button class="picker-add-all" type="button" id="addTopRecommendedBtn">Add top recommended</button>
+            </div>
+            <div class="smart-list" id="smartQueue">
+              <div class="picker-empty">Loading recommendations...</div>
+            </div>
+          </div>
           <div class="waitlist-picker">
             <div class="picker-head">
               <div class="picker-title">Select from waitlist</div>
@@ -980,6 +1015,8 @@ var S = {
 
 var STATE_KEY = 'swiftslot_dashboard_state_v1';
 var waitlistPatients = [];
+var smartRecommendations = [];
+var smartTimer = null;
 
 function saveState() {
   try {
@@ -1612,11 +1649,13 @@ function loadWaitlistPatients(){
         return patient.consent_status==='consented';
       });
       renderWaitlistPicker();
+      renderSmartQueue();
     })
     .catch(function(err){
       console.warn('Could not load waitlist patients', err);
       waitlistPatients=[];
       renderWaitlistPicker();
+      renderSmartQueue();
     });
 }
 
@@ -1624,6 +1663,74 @@ function addAllConsented(){
   for(var i=0;i<waitlistPatients.length;i++){
     if(S.tags.length>=MAX_TAGS) break;
     if(waitlistPatients[i].email) addTag(waitlistPatients[i].email);
+  }
+  renderTags();
+  saveState();
+}
+
+/* ─── SMART RECOVERY QUEUE ───────────────── */
+function renderSmartQueue(){
+  var list=document.getElementById('smartQueue');
+  if(!list) return;
+  list.innerHTML='';
+  if(!waitlistPatients.length){
+    list.innerHTML='<div class="picker-empty">No patients yet. Add patients from Waitlist to use Smart Recovery Queue.</div>';
+    return;
+  }
+  if(!smartRecommendations.length){
+    list.innerHTML='<div class="picker-empty">No consented waitlist patients match yet.</div>';
+    return;
+  }
+  smartRecommendations.forEach(function(patient){
+    var email=(patient.email||'').toLowerCase().trim();
+    if(!email) return;
+    var name=[patient.first_name,patient.last_name].filter(Boolean).join(' ') || email;
+    var btn=document.createElement('button');
+    btn.type='button';
+    btn.className='smart-card';
+    btn.innerHTML=
+      '<div class="smart-main">'+
+        '<span class="smart-name">'+esc(name)+'</span>'+
+        '<span class="smart-score">Score '+esc(patient.score)+'</span>'+
+      '</div>'+
+      '<div class="smart-email">'+esc(email)+'</div>'+
+      '<div class="smart-reasons">'+(patient.reason_labels||[]).slice(0,4).map(function(label){
+        return '<span class="smart-reason">'+esc(label)+'</span>';
+      }).join('')+'</div>';
+    btn.addEventListener('click',function(){ addTag(email); });
+    list.appendChild(btn);
+  });
+}
+
+function loadSmartRecommendations(){
+  var appt=document.getElementById('appointmentType').value || '';
+  var clinician=document.getElementById('clinician').value.trim();
+  var qs=new URLSearchParams();
+  if(appt) qs.set('appointment_type',appt);
+  if(clinician) qs.set('clinician',clinician);
+  qs.set('limit','10');
+  return fetch(API+'/api/recovery/recommendations?'+qs.toString())
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      smartRecommendations=Array.isArray(data.recommendations)?data.recommendations:[];
+      renderSmartQueue();
+    })
+    .catch(function(err){
+      console.warn('Could not load smart recommendations',err);
+      smartRecommendations=[];
+      renderSmartQueue();
+    });
+}
+
+function scheduleSmartRecommendations(){
+  if(smartTimer) clearTimeout(smartTimer);
+  smartTimer=setTimeout(loadSmartRecommendations,300);
+}
+
+function addTopRecommended(){
+  for(var i=0;i<smartRecommendations.length;i++){
+    if(S.tags.length>=MAX_TAGS) break;
+    if(smartRecommendations[i].email) addTag(smartRecommendations[i].email);
   }
   renderTags();
   saveState();
@@ -1694,6 +1801,7 @@ function shakeInput(){
 document.getElementById('rClearBtn').addEventListener('click',function(){ S.tags=[]; renderTags(); saveState(); });
 document.getElementById('tagArea').addEventListener('click',function(){ document.getElementById('tagInput').focus(); });
 document.getElementById('addAllConsentedBtn').addEventListener('click',addAllConsented);
+document.getElementById('addTopRecommendedBtn').addEventListener('click',addTopRecommended);
 
 var ti=document.getElementById('tagInput');
 ti.addEventListener('keydown',function(e){
@@ -1718,8 +1826,9 @@ ti.addEventListener('paste',function(e){
 });
 
 document.getElementById('slotTime').addEventListener('change',updateResetBtn);
-document.getElementById('clinician').addEventListener('input',updateResetBtn);
-document.getElementById('appointmentType').addEventListener('change',updateResetBtn);
+document.getElementById('clinician').addEventListener('input',function(){ updateResetBtn(); scheduleSmartRecommendations(); });
+document.getElementById('clinician').addEventListener('blur',loadSmartRecommendations);
+document.getElementById('appointmentType').addEventListener('change',function(){ updateResetBtn(); loadSmartRecommendations(); });
 document.getElementById('slotValue').addEventListener('input',updateResetBtn);
 
 function updateResetBtn(){
@@ -1819,6 +1928,7 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     setConn(true);
     saveState();
     loadDashboardMetrics();
+    loadWaitlistPatients().then(loadSmartRecommendations);
   })
   .catch(function(err){
     var spp=btn.querySelector('.spin'); if(spp) btn.removeChild(spp);
@@ -1883,7 +1993,7 @@ function healthCheck(){
 /* ─── INIT ───────────────────────────────── */
 loadState();
 renderTags();
-loadWaitlistPatients();
+loadWaitlistPatients().then(loadSmartRecommendations);
 if(S.broadcast){
   if(S.broadcast.status==='locked'||S.broadcast.status==='accepted'){
     renderLocked({accepted_by:null,locked_at:null});

@@ -38,6 +38,7 @@
         td { padding: 12px 20px; font-size: 12px; color: #334155; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #f8fafc; }
+        tbody tr { cursor: pointer; }
         .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; flex-shrink: 0; }
         .patient-cell { display: flex; align-items: center; gap: 10px; }
         .patient-name { font-weight: 600; color: #0f172a; }
@@ -47,6 +48,8 @@
         .chip-blue { background: #dbeafe; color: #1d4ed8; }
         .chip-amber { background: #fef3c7; color: #b45309; }
         .chip-gray { background: #f1f5f9; color: #64748b; }
+        .pref { font-size: 11px; color: #64748b; line-height: 1.5; }
+        .pref strong { color: #334155; }
         .empty-state { text-align: center; padding: 48px; color: #94a3b8; }
         .empty-state h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #64748b; }
         .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.35); align-items: center; justify-content: center; z-index: 20; }
@@ -142,13 +145,18 @@
                         <th>Email</th>
                         <th>Phone</th>
                         <th>Consent</th>
+                        <th>Priority</th>
+                        <th>Preference</th>
+                        <th>Offers</th>
+                        <th>Accepted</th>
+                        <th>Declined</th>
                         <th>Added</th>
                     </tr>
                 </thead>
                 <tbody id="patientRows">
                     <tr>
-                        <td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">
-                            No patients on waitlist yet. Use + Add Patient to start.
+                        <td colspan="10" style="text-align:center; padding:48px; color:#94a3b8;">
+                            No patients yet. Add patients and preferences to improve Smart Recovery Queue recommendations.
                         </td>
                     </tr>
                 </tbody>
@@ -158,9 +166,10 @@
 </div>
 <div class="modal-backdrop" id="patientModal">
     <div class="modal">
-        <h2>Add Patient</h2>
+        <h2 id="patientModalTitle">Add Patient</h2>
         <div class="form-error" id="patientError"></div>
         <form id="patientForm">
+            <input type="hidden" id="patientId">
             <div class="form-grid">
                 <div class="field">
                     <label for="firstName">First Name</label>
@@ -186,6 +195,24 @@
                         <option value="withdrawn">Withdrawn</option>
                     </select>
                 </div>
+                <div class="field">
+                    <label for="patientPriority">Priority</label>
+                    <select id="patientPriority" name="priority">
+                        <option value="1">1 Urgent</option>
+                        <option value="2">2 High</option>
+                        <option value="3" selected>3 Normal</option>
+                        <option value="4">4 Low</option>
+                        <option value="5">5 Very Low</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="preferredAppointmentType">Preferred Type</label>
+                    <input id="preferredAppointmentType" name="preferred_appointment_type" placeholder="Hygienist">
+                </div>
+                <div class="field full">
+                    <label for="preferredClinician">Preferred Clinician</label>
+                    <input id="preferredClinician" name="preferred_clinician" placeholder="Dr. Smith">
+                </div>
                 <div class="field full">
                     <label for="patientNotes">Notes</label>
                     <textarea id="patientNotes" name="notes"></textarea>
@@ -204,9 +231,31 @@
   function setText(id,value){ var el=byId(id); if(el) el.textContent=value; }
   function esc(value){ return String(value == null || value === '' ? '—' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function fmtDate(value){ if(!value) return '—'; return new Date(value).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }
-  function empty(message){ return '<tr><td colspan="5" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
-  function showModal(){ byId('patientModal').classList.add('show'); setText('patientError',''); byId('firstName').focus(); }
-  function hideModal(){ byId('patientModal').classList.remove('show'); byId('patientForm').reset(); setText('patientError',''); }
+  function empty(message){ return '<tr><td colspan="10" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
+  function priorityLabel(value){
+    return {1:'1 Urgent',2:'2 High',3:'3 Normal',4:'4 Low',5:'5 Very Low'}[Number(value)] || '3 Normal';
+  }
+  function showModal(patient){
+    byId('patientModal').classList.add('show');
+    setText('patientError','');
+    byId('patientForm').reset();
+    byId('patientId').value=patient && patient.id ? patient.id : '';
+    byId('patientModalTitle').textContent=patient ? 'Edit Patient' : 'Add Patient';
+    byId('savePatientBtn').textContent=patient ? 'Save Changes' : 'Save Patient';
+    if(patient){
+      byId('firstName').value=patient.first_name || '';
+      byId('lastName').value=patient.last_name || '';
+      byId('patientEmail').value=patient.email || '';
+      byId('patientPhone').value=patient.phone || '';
+      byId('consentStatus').value=patient.consent_status || 'consented';
+      byId('patientPriority').value=patient.priority || 3;
+      byId('preferredAppointmentType').value=patient.preferred_appointment_type || '';
+      byId('preferredClinician').value=patient.preferred_clinician || '';
+      byId('patientNotes').value=patient.notes || '';
+    }
+    byId('firstName').focus();
+  }
+  function hideModal(){ byId('patientModal').classList.remove('show'); byId('patientForm').reset(); byId('patientId').value=''; setText('patientError',''); }
   function loadPatients(){
     fetch('/api/patients')
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
@@ -215,29 +264,46 @@
         setText('totalPatients', data.total||patients.length);
         setText('consentedPatients', data.consented||0);
         var body=byId('patientRows');
-        if(!patients.length){ body.innerHTML=empty('No patients on waitlist yet. Use + Add Patient to start.'); return; }
+        if(!patients.length){ body.innerHTML=empty('No patients yet. Add patients and preferences to improve Smart Recovery Queue recommendations.'); return; }
         body.innerHTML=patients.map(function(p){
           var name=[p.first_name,p.last_name].filter(Boolean).join(' ');
-          return '<tr>'+
+          var pref=[
+            p.preferred_appointment_type ? '<div><strong>Type:</strong> '+esc(p.preferred_appointment_type)+'</div>' : '',
+            p.preferred_clinician ? '<div><strong>Clinician:</strong> '+esc(p.preferred_clinician)+'</div>' : ''
+          ].join('') || '—';
+          return '<tr data-patient-id="'+esc(p.id)+'">'+
             '<td><strong>'+esc(name)+'</strong></td>'+
             '<td>'+esc(p.email)+'</td>'+
             '<td>'+esc(p.phone)+'</td>'+
             '<td><span class="chip chip-blue">'+esc(p.consent_status)+'</span></td>'+
+            '<td><span class="chip chip-gray">'+esc(priorityLabel(p.priority))+'</span></td>'+
+            '<td><div class="pref">'+pref+'</div></td>'+
+            '<td>'+esc(p.offer_count || 0)+'</td>'+
+            '<td>'+esc(p.accepted_count || 0)+'</td>'+
+            '<td>'+esc(p.declined_count || 0)+'</td>'+
             '<td>'+esc(fmtDate(p.created_at))+'</td>'+
           '</tr>';
         }).join('');
+        body.querySelectorAll('tr[data-patient-id]').forEach(function(row){
+          row.addEventListener('click',function(){
+            var id=this.getAttribute('data-patient-id');
+            var patient=patients.find(function(p){ return p.id===id; });
+            if(patient) showModal(patient);
+          });
+        });
       })
       .catch(function(){ var body=byId('patientRows'); if(body) body.innerHTML=empty('Could not load patients.'); });
   }
 
-  byId('openPatientModal').addEventListener('click',showModal);
+  byId('openPatientModal').addEventListener('click',function(){ showModal(null); });
   byId('closePatientModal').addEventListener('click',hideModal);
   byId('patientForm').addEventListener('submit',function(e){
     e.preventDefault();
     var btn=byId('savePatientBtn');
     btn.disabled=true; btn.textContent='Saving...'; setText('patientError','');
-    fetch('/api/patients',{
-      method:'POST',
+    var patientId=byId('patientId').value;
+    fetch(patientId ? '/api/patients/'+patientId : '/api/patients',{
+      method: patientId ? 'PATCH' : 'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         first_name:byId('firstName').value,
@@ -245,6 +311,9 @@
         email:byId('patientEmail').value,
         phone:byId('patientPhone').value||null,
         consent_status:byId('consentStatus').value,
+        priority:Number(byId('patientPriority').value || 3),
+        preferred_appointment_type:byId('preferredAppointmentType').value||null,
+        preferred_clinician:byId('preferredClinician').value||null,
         notes:byId('patientNotes').value||null
       })
     })
@@ -254,7 +323,7 @@
       hideModal(); loadPatients();
     })
     .catch(function(){ setText('patientError','Could not add patient'); })
-    .finally(function(){ btn.disabled=false; btn.textContent='Save Patient'; });
+    .finally(function(){ btn.disabled=false; btn.textContent=byId('patientId').value ? 'Save Changes' : 'Save Patient'; });
   });
   loadPatients();
 })();

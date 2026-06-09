@@ -148,6 +148,34 @@
                 </div>
             </div>
         </div>
+        <div class="panel" style="margin-top:16px;">
+            <div class="panel-head">
+                <div class="panel-head-title">Patient Response Intelligence</div>
+                <div class="panel-head-sub">Waitlist response patterns from patient history</div>
+            </div>
+            <div class="panel-body">
+                <div class="stat-row">
+                    <span class="stat-label">Total Patients</span>
+                    <span class="stat-value" id="intelTotalPatients">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Avg Accepted Per Patient</span>
+                    <span class="stat-value" id="intelAvgAccepted">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Most Responsive Patient</span>
+                    <span class="stat-value" id="intelMostResponsive">—</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Contacted Last 7 Days</span>
+                    <span class="stat-value" id="intelRecentContact">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">No Response History</span>
+                    <span class="stat-value" id="intelNoHistory">0</span>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 <script>
@@ -193,6 +221,26 @@
     .catch(function(){
       var top=byId('topClinicians');
       if(top) top.innerHTML='<h3>Could not load analytics.</h3><p>Please refresh and try again.</p>';
+    });
+
+  fetch('/api/patients')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      var patients=Array.isArray(data.patients)?data.patients:[];
+      var total=patients.length;
+      var acceptedTotal=patients.reduce(function(sum,p){ return sum+Number(p.accepted_count||0); },0);
+      var most=patients.slice().sort(function(a,b){ return Number(b.accepted_count||0)-Number(a.accepted_count||0); })[0];
+      var weekAgo=Date.now()-(7*24*60*60*1000);
+      var recent=patients.filter(function(p){ return p.last_contacted_at && new Date(p.last_contacted_at).getTime()>=weekAgo; }).length;
+      var noHistory=patients.filter(function(p){ return Number(p.accepted_count||0)===0 && Number(p.declined_count||0)===0; }).length;
+      setText('intelTotalPatients', total);
+      setText('intelAvgAccepted', total ? (acceptedTotal/total).toFixed(1) : '0');
+      setText('intelMostResponsive', most && Number(most.accepted_count||0)>0 ? ([most.first_name,most.last_name].filter(Boolean).join(' ') || most.email) : '—');
+      setText('intelRecentContact', recent);
+      setText('intelNoHistory', noHistory);
+    })
+    .catch(function(){
+      setText('intelMostResponsive','Could not load patients');
     });
 })();
 </script>
