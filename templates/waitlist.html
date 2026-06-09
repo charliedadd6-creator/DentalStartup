@@ -146,7 +146,9 @@
                         <th>Phone</th>
                         <th>Consent</th>
                         <th>Priority</th>
-                        <th>Preference</th>
+                        <th>Preferred type</th>
+                        <th>Preferred clinician</th>
+                        <th>Lifecycle</th>
                         <th>Offers</th>
                         <th>Accepted</th>
                         <th>Declined</th>
@@ -155,8 +157,8 @@
                 </thead>
                 <tbody id="patientRows">
                     <tr>
-                        <td colspan="10" style="text-align:center; padding:48px; color:#94a3b8;">
-                            No patients yet. Add patients and preferences to improve Smart Recovery Queue recommendations.
+                        <td colspan="12" style="text-align:center; padding:48px; color:#94a3b8;">
+                            Add consented patients here. Their preferences and response history power Smart Recovery Queue.
                         </td>
                     </tr>
                 </tbody>
@@ -207,11 +209,22 @@
                 </div>
                 <div class="field">
                     <label for="preferredAppointmentType">Preferred Type</label>
-                    <input id="preferredAppointmentType" name="preferred_appointment_type" placeholder="Hygienist">
+                    <select id="preferredAppointmentType" name="preferred_appointment_type">
+                        <option value="">No preference</option>
+                    </select>
                 </div>
                 <div class="field full">
                     <label for="preferredClinician">Preferred Clinician</label>
                     <input id="preferredClinician" name="preferred_clinician" placeholder="Dr. Smith">
+                </div>
+                <div class="field full">
+                    <label for="lifecycleStatus">Lifecycle Status</label>
+                    <select id="lifecycleStatus" name="lifecycle_status">
+                        <option value="waitlist">Waitlist</option>
+                        <option value="booked">Booked</option>
+                        <option value="completed">Completed</option>
+                        <option value="archived">Archived</option>
+                    </select>
                 </div>
                 <div class="field full">
                     <label for="patientNotes">Notes</label>
@@ -231,9 +244,27 @@
   function setText(id,value){ var el=byId(id); if(el) el.textContent=value; }
   function esc(value){ return String(value == null || value === '' ? '—' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function fmtDate(value){ if(!value) return '—'; return new Date(value).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }
-  function empty(message){ return '<tr><td colspan="10" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
+  function empty(message){ return '<tr><td colspan="12" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
   function priorityLabel(value){
     return {1:'1 Urgent',2:'2 High',3:'3 Normal',4:'4 Low',5:'5 Very Low'}[Number(value)] || '3 Normal';
+  }
+  function lifecycleLabel(value){
+    return {waitlist:'Waitlist',booked:'Booked',completed:'Completed',archived:'Archived'}[value] || 'Waitlist';
+  }
+  function populateAppointmentTypes(types){
+    var select=byId('preferredAppointmentType');
+    if(!select) return;
+    var current=select.value;
+    select.innerHTML='<option value="">No preference</option>'+(types||[]).map(function(type){
+      return '<option value="'+esc(type)+'">'+esc(type)+'</option>';
+    }).join('');
+    select.value=current || '';
+  }
+  function loadAppointmentTypes(){
+    return fetch('/api/appointment-types')
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(data){ populateAppointmentTypes(data.appointment_types || []); })
+      .catch(function(){ populateAppointmentTypes(['Check-up','Hygienist','Emergency','Filling','Crown','Extraction','Consultation','Other']); });
   }
   function showModal(patient){
     byId('patientModal').classList.add('show');
@@ -251,6 +282,7 @@
       byId('patientPriority').value=patient.priority || 3;
       byId('preferredAppointmentType').value=patient.preferred_appointment_type || '';
       byId('preferredClinician').value=patient.preferred_clinician || '';
+      byId('lifecycleStatus').value=patient.lifecycle_status || 'waitlist';
       byId('patientNotes').value=patient.notes || '';
     }
     byId('firstName').focus();
@@ -264,20 +296,18 @@
         setText('totalPatients', data.total||patients.length);
         setText('consentedPatients', data.consented||0);
         var body=byId('patientRows');
-        if(!patients.length){ body.innerHTML=empty('No patients yet. Add patients and preferences to improve Smart Recovery Queue recommendations.'); return; }
+        if(!patients.length){ body.innerHTML=empty('Add consented patients here. Their preferences and response history power Smart Recovery Queue.'); return; }
         body.innerHTML=patients.map(function(p){
           var name=[p.first_name,p.last_name].filter(Boolean).join(' ');
-          var pref=[
-            p.preferred_appointment_type ? '<div><strong>Type:</strong> '+esc(p.preferred_appointment_type)+'</div>' : '',
-            p.preferred_clinician ? '<div><strong>Clinician:</strong> '+esc(p.preferred_clinician)+'</div>' : ''
-          ].join('') || '—';
           return '<tr data-patient-id="'+esc(p.id)+'">'+
             '<td><strong>'+esc(name)+'</strong></td>'+
             '<td>'+esc(p.email)+'</td>'+
             '<td>'+esc(p.phone)+'</td>'+
             '<td><span class="chip chip-blue">'+esc(p.consent_status)+'</span></td>'+
             '<td><span class="chip chip-gray">'+esc(priorityLabel(p.priority))+'</span></td>'+
-            '<td><div class="pref">'+pref+'</div></td>'+
+            '<td>'+esc(p.preferred_appointment_type)+'</td>'+
+            '<td>'+esc(p.preferred_clinician)+'</td>'+
+            '<td><span class="chip chip-gray">'+esc(lifecycleLabel(p.lifecycle_status))+'</span></td>'+
             '<td>'+esc(p.offer_count || 0)+'</td>'+
             '<td>'+esc(p.accepted_count || 0)+'</td>'+
             '<td>'+esc(p.declined_count || 0)+'</td>'+
@@ -314,6 +344,7 @@
         priority:Number(byId('patientPriority').value || 3),
         preferred_appointment_type:byId('preferredAppointmentType').value||null,
         preferred_clinician:byId('preferredClinician').value||null,
+        lifecycle_status:byId('lifecycleStatus').value||'waitlist',
         notes:byId('patientNotes').value||null
       })
     })
@@ -325,7 +356,7 @@
     .catch(function(){ setText('patientError','Could not add patient'); })
     .finally(function(){ btn.disabled=false; btn.textContent=byId('patientId').value ? 'Save Changes' : 'Save Patient'; });
   });
-  loadPatients();
+  loadAppointmentTypes().then(loadPatients);
 })();
 </script>
 <script>

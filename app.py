@@ -62,6 +62,17 @@ def iso_or_none(value):
 DEFAULT_GDPR_NOTICE = (
     "Only contact patients who have given explicit consent to receive short-notice appointment offers."
 )
+APPOINTMENT_TYPES = [
+    "Check-up",
+    "Hygienist",
+    "Emergency",
+    "Filling",
+    "Crown",
+    "Extraction",
+    "Consultation",
+    "Other",
+]
+PATIENT_LIFECYCLE_STATUSES = {"waitlist", "booked", "completed", "archived"}
 
 
 def safe_int(value, default=0):
@@ -84,6 +95,28 @@ def clean_optional_string(value):
         return None
     trimmed = str(value).strip()
     return trimmed or None
+
+
+def normalize_appointment_type(value):
+    cleaned = clean_optional_string(value)
+    if cleaned is None:
+        return None
+    for appointment_type in APPOINTMENT_TYPES:
+        if appointment_type.lower() == cleaned.lower():
+            return appointment_type
+    raise ValueError(f"appointment_type must be one of: {', '.join(APPOINTMENT_TYPES)}")
+
+
+def normalize_lifecycle_status(value) -> str:
+    cleaned = clean_optional_string(value) or "waitlist"
+    cleaned = cleaned.lower()
+    if cleaned not in PATIENT_LIFECYCLE_STATUSES:
+        raise ValueError("lifecycle_status must be waitlist, booked, completed, or archived")
+    return cleaned
+
+
+def get_resend_from_email() -> str:
+    return os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
 
 
 def generate_secure_token(offer_id: str) -> str:
@@ -233,6 +266,7 @@ class PatientCreate(BaseModel):
     priority: int = 3
     preferred_appointment_type: str | None = None
     preferred_clinician: str | None = None
+    lifecycle_status: str = "waitlist"
 
     @field_validator("priority")
     @classmethod
@@ -250,6 +284,7 @@ class PatientUpdate(BaseModel):
     priority: int | None = None
     preferred_appointment_type: str | None = None
     preferred_clinician: str | None = None
+    lifecycle_status: str | None = None
 
     @field_validator("email", mode="before")
     @classmethod
@@ -267,6 +302,7 @@ class PatientUpdate(BaseModel):
         "notes",
         "preferred_appointment_type",
         "preferred_clinician",
+        "lifecycle_status",
         mode="before",
     )
     @classmethod
@@ -368,6 +404,7 @@ async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
     clinic_name = row["display_name"] or row["name"] or "Your clinic"
     contact_email = row["contact_email"]
     default_expiry = clamp_expiry_minutes(safe_int(row["default_expiry_minutes"], 240))
+    email_sender = get_resend_from_email()
 
     return {
         "clinic_id": row["id"],
@@ -379,6 +416,8 @@ async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
         "default_slot_value_pence": max(0, safe_int(row["default_slot_value_pence"], 0)),
         "default_expiry_minutes": default_expiry,
         "gdpr_notice": row["gdpr_notice"] or DEFAULT_GDPR_NOTICE,
+        "email_sender": email_sender,
+        "email_sender_is_testing": "resend.dev" in email_sender.lower(),
     }
 
 
@@ -401,6 +440,9 @@ def serialize_patient(row) -> dict:
         "accepted_count": row["accepted_count"],
         "declined_count": row["declined_count"],
         "offer_count": row["offer_count"],
+        "lifecycle_status": row["lifecycle_status"],
+        "booked_at": iso_or_none(row["booked_at"]),
+        "completed_at": iso_or_none(row["completed_at"]),
         "archived_at": iso_or_none(row["archived_at"]),
         "created_at": iso_or_none(row["created_at"]),
         "updated_at": iso_or_none(row["updated_at"]),
@@ -540,6 +582,14 @@ async def api_get_clinic_settings(request: Request):
 
     clinic_id = get_session_clinic_id(request)
     return await get_clinic_settings(request.app.state.pool, clinic_id)
+
+
+@app.get("/api/appointment-types")
+async def api_appointment_types(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"appointment_types": APPOINTMENT_TYPES}
 
 
 @app.patch("/api/clinic/settings")
@@ -842,27 +892,40 @@ async def api_analytics_summary(request: Request):
 
 
 @app.get("/api/patients")
-async def api_patients(request: Request, include_archived: bool = False):
+async def api_patients(
+    request: Request,
+    include_archived: bool = False,
+    lifecycle_status: str | None = None,
+):
     auth_redirect = require_auth(request)
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    lifecycle_filter = None
+    if lifecycle_status is not None:
+        try:
+            lifecycle_filter = normalize_lifecycle_status(lifecycle_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     async with request.app.state.pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT id::text, first_name, last_name, email, phone, consent_status,
                    consent_source, consented_at, notes, priority, preferred_appointment_type,
                    preferred_clinician, last_contacted_at, last_response_at,
-                   accepted_count, declined_count, offer_count, archived_at,
+                   accepted_count, declined_count, offer_count, lifecycle_status,
+                   booked_at, completed_at, archived_at,
                    created_at, updated_at
             FROM patients
             WHERE clinic_id = $1
               AND ($2::boolean OR archived_at IS NULL)
+              AND ($3::text IS NULL OR lifecycle_status = $3)
             ORDER BY created_at DESC;
             """,
             clinic_uuid,
             include_archived,
+            lifecycle_filter,
         )
 
     patients = [serialize_patient(row) for row in rows]
@@ -883,8 +946,16 @@ async def api_create_patient(request: Request, patient: PatientCreate):
     patient_id = uuid.uuid4()
     email = str(patient.email).lower().strip()
     consented_at = datetime.now(timezone.utc) if patient.consent_status == "consented" else None
-    preferred_appointment_type = clean_optional_string(patient.preferred_appointment_type)
+    try:
+        preferred_appointment_type = normalize_appointment_type(patient.preferred_appointment_type)
+        lifecycle_status = normalize_lifecycle_status(patient.lifecycle_status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     preferred_clinician = clean_optional_string(patient.preferred_clinician)
+    now = datetime.now(timezone.utc)
+    booked_at = now if lifecycle_status == "booked" else None
+    completed_at = now if lifecycle_status == "completed" else None
+    archived_at = now if lifecycle_status in {"archived", "completed"} else None
 
     try:
         async with request.app.state.pool.acquire() as conn:
@@ -893,14 +964,16 @@ async def api_create_patient(request: Request, patient: PatientCreate):
                 INSERT INTO patients (
                     id, clinic_id, first_name, last_name, email, phone,
                     consent_status, consent_source, consented_at, notes,
-                    priority, preferred_appointment_type, preferred_clinician
+                    priority, preferred_appointment_type, preferred_clinician,
+                    lifecycle_status, booked_at, completed_at, archived_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual', $8, $9, $10, $11, $12)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual', $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 RETURNING id::text, first_name, last_name, email, phone, consent_status,
                           consent_source, consented_at, notes, priority,
                           preferred_appointment_type, preferred_clinician,
                           last_contacted_at, last_response_at, accepted_count,
-                          declined_count, offer_count, archived_at, created_at, updated_at;
+                          declined_count, offer_count, lifecycle_status,
+                          booked_at, completed_at, archived_at, created_at, updated_at;
                 """,
                 patient_id,
                 clinic_uuid,
@@ -914,6 +987,10 @@ async def api_create_patient(request: Request, patient: PatientCreate):
                 patient.priority,
                 preferred_appointment_type,
                 preferred_clinician,
+                lifecycle_status,
+                booked_at,
+                completed_at,
+                archived_at,
             )
     except asyncpg.UniqueViolationError:
         return JSONResponse({"error": "Patient already exists on this waitlist"}, status_code=400)
@@ -944,10 +1021,23 @@ async def api_update_patient(patient_id: str, update: PatientUpdate, request: Re
         "priority",
         "preferred_appointment_type",
         "preferred_clinician",
+        "lifecycle_status",
     }
     fields = [field for field in update.model_fields_set if field in allowed_fields]
     if "first_name" in fields and payload.get("first_name") is None:
         raise HTTPException(status_code=400, detail="first_name cannot be empty")
+    if "preferred_appointment_type" in fields:
+        try:
+            payload["preferred_appointment_type"] = normalize_appointment_type(payload.get("preferred_appointment_type"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "lifecycle_status" in fields and payload.get("lifecycle_status") is None:
+        raise HTTPException(status_code=400, detail="lifecycle_status must be waitlist, booked, completed, or archived")
+    if "lifecycle_status" in fields:
+        try:
+            payload["lifecycle_status"] = normalize_lifecycle_status(payload.get("lifecycle_status"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not fields:
         async with request.app.state.pool.acquire() as conn:
@@ -956,7 +1046,8 @@ async def api_update_patient(patient_id: str, update: PatientUpdate, request: Re
                 SELECT id::text, first_name, last_name, email, phone, consent_status,
                        consent_source, consented_at, notes, priority, preferred_appointment_type,
                        preferred_clinician, last_contacted_at, last_response_at,
-                       accepted_count, declined_count, offer_count, archived_at,
+                       accepted_count, declined_count, offer_count, lifecycle_status,
+                       booked_at, completed_at, archived_at,
                        created_at, updated_at
                 FROM patients
                 WHERE id = $1 AND clinic_id = $2 AND archived_at IS NULL
@@ -982,6 +1073,7 @@ async def api_update_patient(patient_id: str, update: PatientUpdate, request: Re
             "notes",
             "preferred_appointment_type",
             "preferred_clinician",
+            "lifecycle_status",
         }:
             value = clean_optional_string(value)
         assignments.append(f"{field} = ${index}")
@@ -989,6 +1081,13 @@ async def api_update_patient(patient_id: str, update: PatientUpdate, request: Re
 
     if "consent_status" in fields and payload.get("consent_status") == "consented":
         assignments.append("consented_at = COALESCE(consented_at, now())")
+    lifecycle_value = payload.get("lifecycle_status") if "lifecycle_status" in fields else None
+    if lifecycle_value == "booked":
+        assignments.append("booked_at = COALESCE(booked_at, now())")
+    if lifecycle_value == "completed":
+        assignments.append("completed_at = COALESCE(completed_at, now())")
+    if lifecycle_value in {"archived", "completed"}:
+        assignments.append("archived_at = COALESCE(archived_at, now())")
     assignments.append("updated_at = now()")
     values.extend([patient_uuid, clinic_uuid])
 
@@ -1005,7 +1104,8 @@ async def api_update_patient(patient_id: str, update: PatientUpdate, request: Re
                           consent_source, consented_at, notes, priority,
                           preferred_appointment_type, preferred_clinician,
                           last_contacted_at, last_response_at, accepted_count,
-                          declined_count, offer_count, archived_at, created_at, updated_at;
+                          declined_count, offer_count, lifecycle_status,
+                          booked_at, completed_at, archived_at, created_at, updated_at;
                 """,
                 *values,
             )
@@ -1033,7 +1133,9 @@ async def api_archive_patient(patient_id: str, request: Request):
         result = await conn.execute(
             """
             UPDATE patients
-            SET archived_at = now(), updated_at = now()
+            SET lifecycle_status = 'archived',
+                archived_at = COALESCE(archived_at, now()),
+                updated_at = now()
             WHERE id = $1 AND clinic_id = $2 AND archived_at IS NULL
             """,
             patient_uuid,
@@ -1042,6 +1144,65 @@ async def api_archive_patient(patient_id: str, request: Request):
     if result.endswith(" 0"):
         raise HTTPException(status_code=404, detail="Patient not found")
     return {"status": "archived"}
+
+
+@app.post("/api/patients/{patient_id}/mark-booked")
+async def api_mark_patient_booked(patient_id: str, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        patient_uuid = uuid.UUID(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'booked',
+                booked_at = COALESCE(booked_at, now()),
+                updated_at = now()
+            WHERE id = $1 AND clinic_id = $2 AND archived_at IS NULL
+            """,
+            patient_uuid,
+            clinic_uuid,
+        )
+    if result.endswith(" 0"):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return {"status": "booked"}
+
+
+@app.post("/api/patients/{patient_id}/mark-completed")
+async def api_mark_patient_completed(patient_id: str, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        patient_uuid = uuid.UUID(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE patients
+            SET lifecycle_status = 'completed',
+                completed_at = COALESCE(completed_at, now()),
+                archived_at = COALESCE(archived_at, now()),
+                updated_at = now()
+            WHERE id = $1 AND clinic_id = $2
+            """,
+            patient_uuid,
+            clinic_uuid,
+        )
+    if result.endswith(" 0"):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return {"status": "completed"}
 
 
 @app.get("/api/recovery/recommendations")
@@ -1056,7 +1217,10 @@ async def api_recovery_recommendations(
         raise HTTPException(status_code=401, detail="Authentication required")
 
     clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
-    appointment_type_norm = clean_optional_string(appointment_type)
+    try:
+        appointment_type_norm = normalize_appointment_type(appointment_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     clinician_norm = clean_optional_string(clinician)
     max_limit = max(1, min(safe_int(limit, 10), 50))
     now = datetime.now(timezone.utc)
@@ -1067,11 +1231,12 @@ async def api_recovery_recommendations(
             SELECT id::text, first_name, last_name, email, phone, priority,
                    preferred_appointment_type, preferred_clinician,
                    last_contacted_at, last_response_at, accepted_count,
-                   declined_count, offer_count
+                   declined_count, offer_count, lifecycle_status
             FROM patients
             WHERE clinic_id = $1
               AND consent_status = 'consented'
               AND archived_at IS NULL
+              AND lifecycle_status = 'waitlist'
             """,
             clinic_uuid,
         )
@@ -1129,6 +1294,7 @@ async def api_recovery_recommendations(
                 "accepted_count": accepted_count,
                 "declined_count": declined_count,
                 "offer_count": offer_count,
+                "lifecycle_status": row["lifecycle_status"],
                 "last_contacted_at": iso_or_none(row["last_contacted_at"]),
                 "last_response_at": iso_or_none(row["last_response_at"]),
                 "score": score,
@@ -1447,6 +1613,8 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
                 UPDATE patients
                 SET accepted_count = accepted_count + 1,
                     last_response_at = $3,
+                    lifecycle_status = 'booked',
+                    booked_at = COALESCE(booked_at, $3),
                     updated_at = $3
                 WHERE clinic_id = $1
                   AND lower(email) = lower($2)
@@ -1997,7 +2165,22 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
 
         await conn.execute("""
         ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'waitlist';
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
         ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS booked_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
         """)
 
         await conn.execute("""
@@ -2013,6 +2196,11 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_patients_last_contacted
         ON patients(last_contacted_at);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_patients_lifecycle_status
+        ON patients(clinic_id, lifecycle_status);
         """)
 
         await conn.execute("""
@@ -2207,6 +2395,10 @@ async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferReque
         if request.slot_value_pence > 0
         else clinic_settings["default_slot_value_pence"]
     )
+    try:
+        appointment_type = normalize_appointment_type(request.appointment_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
@@ -2230,7 +2422,7 @@ async def create_broadcast_slot(pool: asyncpg.Pool, request: DashboardOfferReque
             clinic_uuid,
             request.slot_time,
             request.clinician,
-            request.appointment_type,
+            appointment_type,
             slot_value_pence,
             expires_at,
         )
@@ -2479,19 +2671,24 @@ async def send_waitlist_offer_emails(pool: asyncpg.Pool, slot: asyncpg.Record, o
         }
 
     await asyncio.gather(
-        *(send_offer_email_to_patient(slot, offer, clinic_settings) for offer in offers),
+        *(send_offer_email_to_patient(pool, slot, offer, clinic_settings) for offer in offers),
         return_exceptions=True,
     )
 
 
-async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Record, clinic_settings: dict) -> None:
+async def send_offer_email_to_patient(
+    pool: asyncpg.Pool,
+    slot: asyncpg.Record,
+    offer: asyncpg.Record,
+    clinic_settings: dict,
+) -> None:
     api_key = (resend.api_key or "").strip()
     recipient = str(offer["patient_email"])
     if not api_key or api_key == "re_your_key_here":
         logger.error("Resend is not configured; skipping outbound waitlist email to %s.", recipient)
         return
 
-    from_email = os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
+    from_email = get_resend_from_email()
     clinic_name = clinic_settings["clinic_name"]
     payload = {
         "from": from_email,
@@ -2510,7 +2707,24 @@ async def send_offer_email_to_patient(slot: asyncpg.Record, offer: asyncpg.Recor
                 lambda: resend.Emails.send(payload),
             )
         except Exception:
-            logger.exception("Failed to send waitlist offer email to %s", recipient)
+            if "resend.dev" in from_email.lower():
+                logger.exception(
+                    "Failed to send waitlist offer email to %s. Testing sender %s may only send to verified Resend recipients; verify swiftslot.org and use a domain sender.",
+                    recipient,
+                    from_email,
+                )
+            else:
+                logger.exception("Failed to send waitlist offer email to %s", recipient)
+            await log_clinical_event(
+                pool,
+                "email_send_failed",
+                clinic_id=str(slot["clinic_id"]),
+                slot_id=str(slot["id"]),
+                offer_id=str(offer["id"]),
+                patient_email=recipient,
+                success=False,
+                details={"sender": from_email},
+            )
 
 
 def build_offer_email_html(slot: asyncpg.Record, offer: asyncpg.Record, clinic_settings: dict) -> str:

@@ -851,12 +851,7 @@ Logout
             <div>
               <label class="field-label" for="appointmentType">Appointment Type</label>
               <select class="f-input" id="appointmentType">
-                <option value="Check-up">Check-up</option>
-                <option value="Hygienist">Hygienist</option>
-                <option value="Emergency">Emergency</option>
-                <option value="Consultation">Consultation</option>
-                <option value="Treatment">Treatment</option>
-                <option value="Other">Other</option>
+                <option value="">Select appointment type</option>
               </select>
               <div class="f-hint">Used for reporting and revenue analysis</div>
             </div>
@@ -1177,6 +1172,23 @@ fetch(API+'/api/clinic/settings')
   .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
   .then(applyClinicSettings)
   .catch(function(err){ addLog('WARN','Clinic settings unavailable: '+err.message); });
+
+function populateAppointmentTypes(types){
+  var select=document.getElementById('appointmentType');
+  if(!select) return;
+  var current=select.value;
+  select.innerHTML='<option value="">Select appointment type</option>'+(types||[]).map(function(type){
+    return '<option value="'+esc(type)+'">'+esc(type)+'</option>';
+  }).join('');
+  select.value=current || '';
+}
+
+function loadAppointmentTypes(){
+  return fetch(API+'/api/appointment-types')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){ populateAppointmentTypes(data.appointment_types || []); })
+    .catch(function(){ populateAppointmentTypes(['Check-up','Hygienist','Emergency','Filling','Crown','Extraction','Consultation','Other']); });
+}
 
 /* ─── PREFILL SLOT TIME ──────────────────── */
 function prefillSlot(){
@@ -1674,11 +1686,11 @@ function renderSmartQueue(){
   if(!list) return;
   list.innerHTML='';
   if(!waitlistPatients.length){
-    list.innerHTML='<div class="picker-empty">No patients yet. Add patients from Waitlist to use Smart Recovery Queue.</div>';
+    list.innerHTML='<div class="picker-empty">Add consented patients in Waitlist to unlock Smart Recovery Queue. Recommendations are based on consent, priority, preferences, and response history.</div>';
     return;
   }
   if(!smartRecommendations.length){
-    list.innerHTML='<div class="picker-empty">No consented waitlist patients match yet.</div>';
+    list.innerHTML='<div class="picker-empty">No consented waitlist patients match yet. Recommendations are based on consent, priority, preferences, and response history.</div>';
     return;
   }
   smartRecommendations.forEach(function(patient){
@@ -1945,7 +1957,7 @@ function doReset(){
   S.broadcast=null; S.roster={}; S.tags=[];
   clearState();
   document.getElementById('clinician').value='';
-  document.getElementById('appointmentType').value='Check-up';
+  document.getElementById('appointmentType').value='';
   document.getElementById('slotValue').value='';
   prefillSlot(); renderTags(); unlockForm(); renderIdle();
   removeClass('rosterPanel', 'show');
@@ -1993,7 +2005,7 @@ function healthCheck(){
 /* ─── INIT ───────────────────────────────── */
 loadState();
 renderTags();
-loadWaitlistPatients().then(loadSmartRecommendations);
+loadAppointmentTypes().then(function(){ return loadWaitlistPatients(); }).then(loadSmartRecommendations);
 if(S.broadcast){
   if(S.broadcast.status==='locked'||S.broadcast.status==='accepted'){
     renderLocked({accepted_by:null,locked_at:null});
