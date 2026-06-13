@@ -866,6 +866,23 @@ async def api_system_readiness(request: Request):
     return {"ready": all(check["status"] == "pass" for check in checks), "checks": checks}
 
 
+@app.get("/api/system/request-debug")
+async def api_system_request_debug(request: Request):
+    if os.getenv("ALLOW_DEBUG_ENDPOINTS", "").lower() != "true":
+        auth_redirect = require_auth(request)
+        if auth_redirect:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+    return {
+        "request_url": str(request.url),
+        "request_base_url": str(request.base_url),
+        "host": request.headers.get("host"),
+        "client_host": request.client.host if request.client else None,
+        "render_external_url": settings.render_external_url,
+        "session_cookie_secure": SESSION_COOKIE_SECURE,
+    }
+
+
 @app.patch("/api/clinic/settings")
 async def api_update_clinic_settings(update: ClinicSettingsUpdate, request: Request):
     auth_redirect = require_auth(request)
