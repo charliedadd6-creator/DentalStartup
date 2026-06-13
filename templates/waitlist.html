@@ -65,6 +65,9 @@
         .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
         .ghost-btn { background: #f1f5f9; color: #334155; border: none; border-radius: 8px; padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; }
         .form-error { color: #b91c1c; font-size: 12px; min-height: 18px; margin-bottom: 8px; }
+        .panel-actions { display: flex; gap: 10px; }
+        .import-help { font-size: 11px; color: #64748b; line-height: 1.5; margin-bottom: 8px; }
+        .import-result, .export-json { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; font-size: 12px; color: #334155; max-height: 220px; overflow: auto; white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -136,7 +139,10 @@
                     <div class="panel-head-title">Patient Waitlist</div>
                     <div class="panel-head-sub">All consented short-notice patients</div>
                 </div>
-                <button class="add-btn" id="openPatientModal">+ Add Patient</button>
+                <div class="panel-actions">
+                    <button class="ghost-btn" id="openPatientImport" type="button">Import Patients</button>
+                    <button class="add-btn" id="openPatientModal" type="button">+ Add Patient</button>
+                </div>
             </div>
             <table>
                 <thead>
@@ -158,7 +164,7 @@
                 <tbody id="patientRows">
                     <tr>
                         <td colspan="12" style="text-align:center; padding:48px; color:#94a3b8;">
-                            Add consented patients here. Their preferences and response history power Smart Recovery Queue.
+                            Add or import consented patients to power Smart Recovery Queue.
                         </td>
                     </tr>
                 </tbody>
@@ -232,19 +238,60 @@
                 </div>
             </div>
             <div class="modal-actions">
+                <button class="ghost-btn" type="button" id="exportPatientBtn" style="margin-right:auto; display:none;">Export Patient Data</button>
                 <button class="ghost-btn" type="button" id="closePatientModal">Cancel</button>
                 <button class="add-btn" type="submit" id="savePatientBtn">Save Patient</button>
             </div>
         </form>
     </div>
 </div>
+<div class="modal-backdrop" id="patientImportModal">
+    <div class="modal">
+        <h2>Import Patients</h2>
+        <div class="import-help">Paste CSV with columns: first_name,last_name,email,phone,consent_status,priority,preferred_appointment_type,preferred_clinician,notes</div>
+        <div class="field full">
+            <label for="patientCsv">CSV rows</label>
+            <textarea id="patientCsv" style="min-height:160px;"></textarea>
+        </div>
+        <div class="form-error" id="patientImportError"></div>
+        <div class="import-result" id="patientImportResult">Preview results will appear here.</div>
+        <div class="modal-actions">
+            <button class="ghost-btn" type="button" id="closePatientImport">Cancel</button>
+            <button class="ghost-btn" type="button" id="previewPatientImport">Preview</button>
+            <button class="add-btn" type="button" id="commitPatientImport" disabled>Commit Import</button>
+        </div>
+    </div>
+</div>
+<div class="modal-backdrop" id="patientExportModal">
+    <div class="modal">
+        <h2>Patient Data Export</h2>
+        <div class="export-json" id="patientExportJson">Loading export...</div>
+        <div class="modal-actions">
+            <button class="ghost-btn" type="button" id="closePatientExport">Close</button>
+        </div>
+    </div>
+</div>
 <script>
 (function () {
+  var patientImportRows=[];
+  var patientImportPreviewOk=false;
   function byId(id){ return document.getElementById(id); }
   function setText(id,value){ var el=byId(id); if(el) el.textContent=value; }
   function esc(value){ return String(value == null || value === '' ? '—' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function fmtDate(value){ if(!value) return '—'; return new Date(value).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }
   function empty(message){ return '<tr><td colspan="12" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
+  function parseCsv(text){
+    var lines=String(text||'').split(/\r?\n/).map(function(line){ return line.trim(); }).filter(Boolean);
+    if(lines.length<2) return [];
+    var headers=lines[0].split(',').map(function(h){ return h.trim(); });
+    return lines.slice(1).map(function(line){
+      var values=line.split(',').map(function(v){ return v.trim(); });
+      var row={};
+      headers.forEach(function(header,index){ row[header]=values[index] || ''; });
+      if(row.priority) row.priority=Number(row.priority);
+      return row;
+    });
+  }
   function priorityLabel(value){
     return {1:'1 Urgent',2:'2 High',3:'3 Normal',4:'4 Low',5:'5 Very Low'}[Number(value)] || '3 Normal';
   }
@@ -273,6 +320,7 @@
     byId('patientId').value=patient && patient.id ? patient.id : '';
     byId('patientModalTitle').textContent=patient ? 'Edit Patient' : 'Add Patient';
     byId('savePatientBtn').textContent=patient ? 'Save Changes' : 'Save Patient';
+    byId('exportPatientBtn').style.display=patient && patient.id ? '' : 'none';
     if(patient){
       byId('firstName').value=patient.first_name || '';
       byId('lastName').value=patient.last_name || '';
@@ -287,7 +335,7 @@
     }
     byId('firstName').focus();
   }
-  function hideModal(){ byId('patientModal').classList.remove('show'); byId('patientForm').reset(); byId('patientId').value=''; setText('patientError',''); }
+  function hideModal(){ byId('patientModal').classList.remove('show'); byId('patientForm').reset(); byId('patientId').value=''; byId('exportPatientBtn').style.display='none'; setText('patientError',''); }
   function loadPatients(){
     fetch('/api/patients')
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
@@ -296,7 +344,7 @@
         setText('totalPatients', data.total||patients.length);
         setText('consentedPatients', data.consented||0);
         var body=byId('patientRows');
-        if(!patients.length){ body.innerHTML=empty('Add consented patients here. Their preferences and response history power Smart Recovery Queue.'); return; }
+        if(!patients.length){ body.innerHTML=empty('Add or import consented patients to power Smart Recovery Queue.'); return; }
         body.innerHTML=patients.map(function(p){
           var name=[p.first_name,p.last_name].filter(Boolean).join(' ');
           return '<tr data-patient-id="'+esc(p.id)+'">'+
@@ -327,6 +375,61 @@
 
   byId('openPatientModal').addEventListener('click',function(){ showModal(null); });
   byId('closePatientModal').addEventListener('click',hideModal);
+  byId('exportPatientBtn').addEventListener('click',function(){
+    var id=byId('patientId').value;
+    if(!id) return;
+    byId('patientExportModal').classList.add('show');
+    byId('patientExportJson').textContent='Loading export...';
+    fetch('/api/patients/'+encodeURIComponent(id)+'/export')
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(data){ byId('patientExportJson').textContent=JSON.stringify(data,null,2); })
+      .catch(function(err){ byId('patientExportJson').textContent='Could not export patient data: '+err.message; });
+  });
+  byId('closePatientExport').addEventListener('click',function(){ byId('patientExportModal').classList.remove('show'); });
+  byId('openPatientImport').addEventListener('click',function(){
+    byId('patientImportModal').classList.add('show');
+    byId('patientImportError').textContent='';
+    byId('patientImportResult').textContent='Preview results will appear here.';
+    byId('commitPatientImport').disabled=true;
+    patientImportPreviewOk=false;
+  });
+  byId('closePatientImport').addEventListener('click',function(){
+    byId('patientImportModal').classList.remove('show');
+    byId('patientCsv').value='';
+  });
+  byId('previewPatientImport').addEventListener('click',function(){
+    patientImportRows=parseCsv(byId('patientCsv').value);
+    byId('patientImportError').textContent='';
+    byId('commitPatientImport').disabled=true;
+    patientImportPreviewOk=false;
+    fetch('/api/patients/import-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:patientImportRows})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Preview failed');
+        var data=res.data, summary=data.summary||{};
+        patientImportPreviewOk=(summary.valid||0)>0;
+        byId('commitPatientImport').disabled=!patientImportPreviewOk;
+        byId('patientImportResult').textContent=
+          'Valid rows: '+(summary.valid||0)+'\nInvalid rows: '+(summary.invalid||0)+'\nCreates: '+(summary.creates||0)+'\nUpdates: '+(summary.updates||0)+'\n\nInvalid reasons:\n'+
+          (data.invalid_rows||[]).map(function(row){ return 'Row '+(row.index+2)+': '+row.reason; }).join('\n')+
+          '\n\nFirst valid rows:\n'+JSON.stringify((data.valid_rows||[]).slice(0,5), null, 2);
+      })
+      .catch(function(err){ byId('patientImportError').textContent=err.message || 'Preview failed'; });
+  });
+  byId('commitPatientImport').addEventListener('click',function(){
+    if(!patientImportPreviewOk) return;
+    var btn=this; btn.disabled=true; btn.textContent='Importing...';
+    fetch('/api/patients/import-commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:patientImportRows})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Import failed');
+        var data=res.data;
+        byId('patientImportResult').textContent='Created patients: '+(data.created_patients||0)+'\nUpdated patients: '+(data.updated_patients||0)+'\nSkipped rows: '+(data.skipped_rows||0)+'\nErrors: '+((data.errors||[]).length)+'\n\n'+JSON.stringify(data.errors||[], null, 2);
+        loadPatients();
+      })
+      .catch(function(err){ byId('patientImportError').textContent=err.message || 'Import failed'; })
+      .finally(function(){ btn.disabled=false; btn.textContent='Commit Import'; });
+  });
   byId('patientForm').addEventListener('submit',function(e){
     e.preventDefault();
     var btn=byId('savePatientBtn');

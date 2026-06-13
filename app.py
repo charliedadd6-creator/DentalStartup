@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -99,6 +100,32 @@ def clean_optional_string(value):
     return trimmed or None
 
 
+def clean_optional_text(value):
+    return clean_optional_string(value)
+
+
+def normalize_email(value) -> str | None:
+    cleaned = clean_optional_string(value)
+    if cleaned is None:
+        return None
+    return cleaned.lower()
+
+
+def parse_money_to_pence(value) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    text = str(value).strip().replace("£", "").replace(",", "")
+    try:
+        amount = float(text)
+    except ValueError as exc:
+        raise ValueError("money value must be a valid number") from exc
+    if amount < 0:
+        raise ValueError("money value cannot be negative")
+    return round(amount * 100)
+
+
 def normalize_appointment_type(value):
     cleaned = clean_optional_string(value)
     if cleaned is None:
@@ -107,6 +134,10 @@ def normalize_appointment_type(value):
         if appointment_type.lower() == cleaned.lower():
             return appointment_type
     raise ValueError(f"appointment_type must be one of: {', '.join(APPOINTMENT_TYPES)}")
+
+
+def validate_appointment_type(value):
+    return normalize_appointment_type(value)
 
 
 def normalize_lifecycle_status(value) -> str:
@@ -410,6 +441,10 @@ class AppointmentImportRows(BaseModel):
     rows: list[dict] = Field(default_factory=list, max_length=500)
 
 
+class PatientImportRows(BaseModel):
+    rows: list[dict] = Field(default_factory=list, max_length=500)
+
+
 async def log_clinical_event(
     pool: asyncpg.Pool,
     event_type: str,
@@ -693,6 +728,142 @@ async def api_appointment_types(request: Request):
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
     return {"appointment_types": APPOINTMENT_TYPES}
+
+
+def env_is_placeholder(value: str | None, dev_fallbacks: set[str] | None = None) -> bool:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return True
+    lowered = cleaned.lower()
+    if dev_fallbacks and cleaned in dev_fallbacks:
+        return True
+    return any(token in lowered for token in ["your_key_here", "placeholder", "change-this", "changeme", "example"])
+
+
+def readiness_check(key: str, label: str, ok: bool, message: str, warning: bool = False) -> dict:
+    return {
+        "key": key,
+        "label": label,
+        "status": "pass" if ok and not warning else "warning" if ok and warning else "fail",
+        "message": message,
+    }
+
+
+@app.get("/api/system/readiness")
+async def api_system_readiness(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        clinic = await conn.fetchrow(
+            """
+            SELECT display_name, reply_to_email, contact_email, default_expiry_minutes
+            FROM clinics
+            WHERE id = $1
+            """,
+            clinic_uuid,
+        )
+        counts = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*)::int FROM patients WHERE clinic_id = $1 AND consent_status = 'consented' AND archived_at IS NULL) AS consented_patients,
+                (SELECT COUNT(*)::int FROM appointments WHERE clinic_id = $1 AND source IN ('recovered', 'manual', 'import')) AS appointments
+            """,
+            clinic_uuid,
+        )
+
+    default_expiry = safe_int(clinic["default_expiry_minutes"], 0) if clinic else 0
+    resend_key = os.getenv("RESEND_API_KEY", "")
+    resend_from_env = os.getenv("RESEND_FROM_EMAIL", "")
+    resend_from = get_resend_from_email()
+    token_secret = os.getenv("TOKEN_SECRET", "")
+    session_secret = os.getenv("SESSION_SECRET", "")
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "")
+    is_production = (
+        os.getenv("RENDER", "").lower() == "true"
+        or os.getenv("ENVIRONMENT", "").lower() == "production"
+        or os.getenv("APP_ENV", "").lower() == "production"
+    )
+    render_https_ok = not is_production or render_url.strip().startswith("https://")
+
+    checks = [
+        readiness_check(
+            "clinic_settings",
+            "Clinic settings completed",
+            bool(clinic and clean_optional_string(clinic["display_name"])),
+            "Clinic display name is set." if clinic and clean_optional_string(clinic["display_name"]) else "Complete clinic display name in Settings.",
+        ),
+        readiness_check(
+            "reply_to_email",
+            "Reply-to email configured",
+            bool(clinic and clean_optional_string(clinic["reply_to_email"])),
+            "Reply-to email is available." if clinic and clean_optional_string(clinic["reply_to_email"]) else "Add a reply-to email in Settings.",
+        ),
+        readiness_check(
+            "default_expiry_minutes",
+            "Default offer expiry set",
+            5 <= default_expiry <= 1440,
+            "Default expiry is within the allowed live range." if 5 <= default_expiry <= 1440 else "Set default expiry between 5 and 1440 minutes.",
+        ),
+        readiness_check(
+            "resend_api_key",
+            "Resend API key configured",
+            not env_is_placeholder(resend_key, {"re_your_key_here"}),
+            "Resend API key is configured." if not env_is_placeholder(resend_key, {"re_your_key_here"}) else "Set RESEND_API_KEY to a live Resend key.",
+        ),
+        readiness_check(
+            "resend_from_email",
+            "Sender email configured",
+            bool(clean_optional_string(resend_from_env)),
+            "Sender email is configured." if clean_optional_string(resend_from_env) else "Set RESEND_FROM_EMAIL.",
+        ),
+        readiness_check(
+            "resend_domain",
+            "Sending domain verified",
+            True,
+            "Sender is using a clinic/domain sender." if "resend.dev" not in (resend_from or "").lower() else "Verify sending domain and stop using the resend.dev test sender.",
+            warning="resend.dev" in (resend_from or "").lower(),
+        ),
+        readiness_check(
+            "token_secret",
+            "Token secret configured",
+            not env_is_placeholder(token_secret, {"dev-token-secret-change-this"}),
+            "TOKEN_SECRET is configured." if not env_is_placeholder(token_secret, {"dev-token-secret-change-this"}) else "Set TOKEN_SECRET to a strong production value.",
+        ),
+        readiness_check(
+            "session_secret",
+            "Session secret configured",
+            not env_is_placeholder(session_secret, {"dev-secret-change-this"}),
+            "SESSION_SECRET is configured." if not env_is_placeholder(session_secret, {"dev-secret-change-this"}) else "Set SESSION_SECRET to a strong production value.",
+        ),
+        readiness_check(
+            "render_external_url",
+            "Production URL uses HTTPS",
+            render_https_ok,
+            "Production external URL is HTTPS." if render_https_ok else "Set RENDER_EXTERNAL_URL to an https:// URL in production.",
+        ),
+        readiness_check(
+            "consented_patients",
+            "Consented waitlist patients added",
+            safe_int(counts["consented_patients"], 0) > 0 if counts else False,
+            "At least one consented waitlist patient exists." if counts and safe_int(counts["consented_patients"], 0) > 0 else "Add or import consented patients.",
+        ),
+        readiness_check(
+            "appointment_types",
+            "Appointment types available",
+            len(APPOINTMENT_TYPES) > 0,
+            "Appointment types are available." if APPOINTMENT_TYPES else "Add at least one appointment type.",
+        ),
+        readiness_check(
+            "appointments",
+            "Appointment workflow has data",
+            safe_int(counts["appointments"], 0) > 0 if counts else False,
+            "At least one appointment has been created or recovered." if counts and safe_int(counts["appointments"], 0) > 0 else "Create, import, or recover an appointment.",
+        ),
+    ]
+    return {"ready": all(check["status"] == "pass" for check in checks), "checks": checks}
 
 
 @app.patch("/api/clinic/settings")
@@ -1144,7 +1315,9 @@ async def api_broadcasts(request: Request):
                 (COUNT(o.id) FILTER (WHERE o.status = 'accepted'))::int AS accepted_offers,
                 (COUNT(o.id) FILTER (WHERE o.status = 'declined'))::int AS declined_offers,
                 (COUNT(o.id) FILTER (WHERE o.status = 'expired'))::int AS expired_offers,
-                (COUNT(o.id) FILTER (WHERE o.status = 'sent'))::int AS pending_offers
+                (COUNT(o.id) FILTER (WHERE o.status = 'sent'))::int AS pending_offers,
+                (COUNT(o.id) FILTER (WHERE o.email_send_status = 'sent'))::int AS sent_email_count,
+                (COUNT(o.id) FILTER (WHERE o.email_send_status = 'failed'))::int AS failed_email_count
             FROM waitlist_slots s
             LEFT JOIN waitlist_offers o
             ON o.slot_id = s.id
@@ -1197,6 +1370,8 @@ async def api_broadcasts(request: Request):
                 "declined_offers": row["declined_offers"],
                 "expired_offers": row["expired_offers"],
                 "pending_offers": row["pending_offers"],
+                "sent_email_count": row["sent_email_count"],
+                "failed_email_count": row["failed_email_count"],
             }
         )
 
@@ -1398,12 +1573,94 @@ def validate_import_rows(rows: list[dict]) -> tuple[list[tuple[int, AppointmentC
     return valid, invalid
 
 
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+PATIENT_IMPORT_CONSENT_STATUSES = {"consented", "not_consented", "unknown"}
+
+
+async def validate_patient_import_rows(
+    conn,
+    clinic_uuid: uuid.UUID,
+    rows: list[dict],
+) -> tuple[list[tuple[int, dict]], list[dict]]:
+    valid: list[tuple[int, dict]] = []
+    invalid: list[dict] = []
+    seen_emails: set[str] = set()
+    normalized_candidates: list[tuple[int, dict]] = []
+
+    for index, row in enumerate(rows):
+        raw_email = normalize_email(row.get("email"))
+        if not raw_email or not EMAIL_RE.match(raw_email):
+            invalid.append({"index": index, "reason": "email is required and must be valid", "row": row})
+            continue
+        if raw_email in seen_emails:
+            invalid.append({"index": index, "reason": "duplicate email in submitted CSV", "row": row})
+            continue
+        seen_emails.add(raw_email)
+
+        first_name = clean_optional_text(row.get("first_name")) or raw_email.split("@", 1)[0]
+        consent_status = (clean_optional_text(row.get("consent_status")) or "unknown").lower()
+        if consent_status not in PATIENT_IMPORT_CONSENT_STATUSES:
+            invalid.append({"index": index, "reason": "consent_status must be consented, not_consented, or unknown", "row": row})
+            continue
+
+        try:
+            preferred_type = normalize_appointment_type(row.get("preferred_appointment_type"))
+        except ValueError as exc:
+            invalid.append({"index": index, "reason": str(exc), "row": row})
+            continue
+
+        normalized_candidates.append(
+            (
+                index,
+                {
+                    "first_name": first_name,
+                    "last_name": clean_optional_text(row.get("last_name")),
+                    "email": raw_email,
+                    "phone": clean_optional_text(row.get("phone")),
+                    "consent_status": consent_status,
+                    "priority": clamp_patient_priority(row.get("priority", 3)),
+                    "preferred_appointment_type": preferred_type,
+                    "preferred_clinician": clean_optional_text(row.get("preferred_clinician")),
+                    "notes": clean_optional_text(row.get("notes")),
+                },
+            )
+        )
+
+    if normalized_candidates:
+        emails = [row["email"] for _, row in normalized_candidates]
+        existing_rows = await conn.fetch(
+            """
+            SELECT id::text, lower(email) AS email
+            FROM patients
+            WHERE clinic_id = $1
+              AND lower(email) = ANY($2::text[])
+            """,
+            clinic_uuid,
+            emails,
+        )
+        existing_by_email = {row["email"]: row["id"] for row in existing_rows}
+        for index, row in normalized_candidates:
+            row["action"] = "update" if row["email"] in existing_by_email else "create"
+            if row["email"] in existing_by_email:
+                row["existing_patient_id"] = existing_by_email[row["email"]]
+            valid.append((index, row))
+
+    return valid, invalid
+
+
 @app.post("/api/appointments/import-preview")
 async def api_appointment_import_preview(payload: AppointmentImportRows, request: Request):
     auth_redirect = require_auth(request)
     if auth_redirect:
         raise HTTPException(status_code=401, detail="Authentication required")
+    clinic_id = get_session_clinic_id(request)
     valid, invalid = validate_import_rows(payload.rows)
+    await log_clinical_event(
+        request.app.state.pool,
+        "appointment_import_preview",
+        clinic_id=clinic_id,
+        details={"valid_rows": len(valid), "invalid_rows": len(invalid), "total_rows": len(payload.rows)},
+    )
     return {
         "valid_rows": [row.model_dump(mode="json") for _, row in valid],
         "invalid_rows": invalid,
@@ -1583,6 +1840,263 @@ async def api_analytics_summary(request: Request):
     }
 
 
+def parse_audit_details(value) -> dict | str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return str(value)
+
+
+@app.get("/api/activity")
+async def api_activity(request: Request, limit: int = 50, event_type: str | None = None):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    max_limit = max(1, min(safe_int(limit, 50), 100))
+    event_filter = clean_optional_text(event_type)
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, event_type, slot_id::text, offer_id::text,
+                   patient_email_hash, success, details, created_at
+            FROM audit_log
+            WHERE clinic_id = $1
+              AND ($2::text IS NULL OR event_type = $2)
+            ORDER BY created_at DESC
+            LIMIT $3
+            """,
+            clinic_uuid,
+            event_filter,
+            max_limit,
+        )
+    return {
+        "events": [
+            {
+                "id": row["id"],
+                "event_type": row["event_type"],
+                "slot_id": row["slot_id"],
+                "offer_id": row["offer_id"],
+                "patient_email_hash": row["patient_email_hash"],
+                "success": row["success"],
+                "details": parse_audit_details(row["details"]),
+                "created_at": iso_or_none(row["created_at"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/export/clinic-summary")
+async def api_export_clinic_summary(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    clinic_settings = await get_clinic_settings(request.app.state.pool, clinic_id)
+    async with request.app.state.pool.acquire() as conn:
+        lifecycle_rows = await conn.fetch(
+            """
+            SELECT lifecycle_status, COUNT(*)::int AS count
+            FROM patients
+            WHERE clinic_id = $1
+            GROUP BY lifecycle_status
+            """,
+            clinic_uuid,
+        )
+        appointment_rows = await conn.fetch(
+            """
+            SELECT status, COUNT(*)::int AS count
+            FROM appointments
+            WHERE clinic_id = $1
+            GROUP BY status
+            """,
+            clinic_uuid,
+        )
+        offer_rows = await conn.fetch(
+            """
+            SELECT status, COUNT(*)::int AS count
+            FROM waitlist_offers
+            WHERE clinic_id = $1
+            GROUP BY status
+            """,
+            clinic_uuid,
+        )
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*)::int FROM waitlist_slots WHERE clinic_id = $1) AS broadcast_count,
+                (SELECT COALESCE(SUM(slot_value_pence), 0)::int
+                   FROM waitlist_slots
+                   WHERE clinic_id = $1 AND (status = 'locked' OR accepted_by IS NOT NULL)) AS revenue_saved_pence
+            """,
+            clinic_uuid,
+        )
+    await log_clinical_event(
+        request.app.state.pool,
+        "clinic_summary_exported",
+        clinic_id=clinic_id,
+    )
+    return {
+        "clinic_settings": {
+            "clinic_name": clinic_settings["clinic_name"],
+            "contact_email": clinic_settings["contact_email"],
+            "phone": clinic_settings["phone"],
+            "reply_to_email": clinic_settings["reply_to_email"],
+            "default_slot_value_pence": clinic_settings["default_slot_value_pence"],
+            "default_expiry_minutes": clinic_settings["default_expiry_minutes"],
+            "gdpr_notice": clinic_settings["gdpr_notice"],
+        },
+        "patients_by_lifecycle_status": {row["lifecycle_status"] or "unknown": row["count"] for row in lifecycle_rows},
+        "appointments_by_status": {row["status"] or "unknown": row["count"] for row in appointment_rows},
+        "broadcast_count": totals["broadcast_count"] if totals else 0,
+        "offers_by_status": {row["status"] or "unknown": row["count"] for row in offer_rows},
+        "revenue_saved_pence": totals["revenue_saved_pence"] if totals else 0,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/patients/import-preview")
+async def api_patient_import_preview(payload: PatientImportRows, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        valid, invalid = await validate_patient_import_rows(conn, clinic_uuid, payload.rows)
+    await log_clinical_event(
+        request.app.state.pool,
+        "patient_import_preview",
+        clinic_id=str(clinic_uuid),
+        details={"valid_rows": len(valid), "invalid_rows": len(invalid), "total_rows": len(payload.rows)},
+    )
+    valid_rows = [row for _, row in valid]
+    return {
+        "valid_rows": valid_rows,
+        "invalid_rows": invalid,
+        "summary": {
+            "valid": len(valid),
+            "invalid": len(invalid),
+            "total": len(payload.rows),
+            "creates": sum(1 for row in valid_rows if row.get("action") == "create"),
+            "updates": sum(1 for row in valid_rows if row.get("action") == "update"),
+        },
+    }
+
+
+@app.post("/api/patients/import-commit")
+async def api_patient_import_commit(payload: PatientImportRows, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    created_patients = 0
+    updated_patients = 0
+    skipped_rows = 0
+    errors = []
+    now = datetime.now(timezone.utc)
+
+    async with request.app.state.pool.acquire() as conn:
+        valid, invalid = await validate_patient_import_rows(conn, clinic_uuid, payload.rows)
+        errors.extend(invalid)
+        skipped_rows += len(invalid)
+        for index, row in valid:
+            try:
+                consented_at = now if row["consent_status"] == "consented" else None
+                if row.get("action") == "update":
+                    await conn.execute(
+                        """
+                        UPDATE patients
+                        SET first_name = $3,
+                            last_name = $4,
+                            phone = $5,
+                            consent_status = $6,
+                            consented_at = CASE
+                                WHEN $6 = 'consented' THEN COALESCE(consented_at, $7)
+                                ELSE consented_at
+                            END,
+                            notes = $8,
+                            priority = $9,
+                            preferred_appointment_type = $10,
+                            preferred_clinician = $11,
+                            archived_at = NULL,
+                            lifecycle_status = CASE
+                                WHEN lifecycle_status = 'archived' THEN 'waitlist'
+                                ELSE lifecycle_status
+                            END,
+                            updated_at = $7
+                        WHERE clinic_id = $1 AND lower(email) = lower($2)
+                        """,
+                        clinic_uuid,
+                        row["email"],
+                        row["first_name"],
+                        row["last_name"],
+                        row["phone"],
+                        row["consent_status"],
+                        now,
+                        row["notes"],
+                        row["priority"],
+                        row["preferred_appointment_type"],
+                        row["preferred_clinician"],
+                    )
+                    updated_patients += 1
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO patients (
+                            id, clinic_id, first_name, last_name, email, phone,
+                            consent_status, consent_source, consented_at, notes,
+                            priority, preferred_appointment_type, preferred_clinician,
+                            lifecycle_status
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, 'csv_import', $8, $9, $10, $11, $12, 'waitlist')
+                        """,
+                        uuid.uuid4(),
+                        clinic_uuid,
+                        row["first_name"],
+                        row["last_name"],
+                        row["email"],
+                        row["phone"],
+                        row["consent_status"],
+                        consented_at,
+                        row["notes"],
+                        row["priority"],
+                        row["preferred_appointment_type"],
+                        row["preferred_clinician"],
+                    )
+                    created_patients += 1
+            except Exception as exc:
+                skipped_rows += 1
+                errors.append({"index": index, "reason": str(exc), "row": row})
+
+    await log_clinical_event(
+        request.app.state.pool,
+        "patient_imported",
+        clinic_id=str(clinic_uuid),
+        details={
+            "created_patients": created_patients,
+            "updated_patients": updated_patients,
+            "skipped_rows": skipped_rows,
+            "errors": len(errors),
+        },
+    )
+    return {
+        "created_patients": created_patients,
+        "updated_patients": updated_patients,
+        "skipped_rows": skipped_rows,
+        "errors": errors,
+    }
+
+
 @app.get("/api/patients")
 async def api_patients(
     request: Request,
@@ -1625,6 +2139,116 @@ async def api_patients(
         "patients": patients,
         "total": len(patients),
         "consented": sum(1 for patient in patients if patient["consent_status"] == "consented"),
+    }
+
+
+@app.get("/api/patients/{patient_id}/export")
+async def api_patient_export(patient_id: str, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        patient_uuid = uuid.UUID(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Patient not found") from exc
+
+    clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
+    async with request.app.state.pool.acquire() as conn:
+        patient = await conn.fetchrow(
+            """
+            SELECT id::text, first_name, last_name, email, phone, consent_status,
+                   consent_source, consented_at, notes, priority, preferred_appointment_type,
+                   preferred_clinician, last_contacted_at, last_response_at,
+                   accepted_count, declined_count, offer_count, lifecycle_status,
+                   booked_at, completed_at, archived_at,
+                   created_at, updated_at
+            FROM patients
+            WHERE id = $1 AND clinic_id = $2
+            """,
+            patient_uuid,
+            clinic_uuid,
+        )
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        email = patient["email"]
+        offers = await conn.fetch(
+            """
+            SELECT o.id::text, o.slot_id::text, o.status, o.email_send_status,
+                   o.sent_at, o.failed_at, o.created_at, o.accepted_at, o.declined_at,
+                   s.slot_time, s.clinician, s.appointment_type
+            FROM waitlist_offers o
+            LEFT JOIN waitlist_slots s ON s.id = o.slot_id AND s.clinic_id = o.clinic_id
+            WHERE o.clinic_id = $1 AND lower(o.patient_email) = lower($2)
+            ORDER BY o.created_at DESC
+            """,
+            clinic_uuid,
+            email,
+        )
+        appointments = await conn.fetch(
+            """
+            SELECT id::text, patient_id::text, patient_email, patient_name, source,
+                   appointment_type, clinician, appointment_time, slot_value_pence,
+                   status, notes, completed_at, cancelled_at, no_show_at,
+                   created_at, updated_at
+            FROM appointments
+            WHERE clinic_id = $1
+              AND (patient_id = $2 OR lower(patient_email) = lower($3))
+            ORDER BY appointment_time DESC
+            """,
+            clinic_uuid,
+            patient_uuid,
+            email,
+        )
+        email_hash = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+        audit_rows = await conn.fetch(
+            """
+            SELECT event_type, success, created_at
+            FROM audit_log
+            WHERE clinic_id = $1 AND patient_email_hash = $2
+            ORDER BY created_at DESC
+            LIMIT 100
+            """,
+            clinic_uuid,
+            email_hash,
+        )
+
+    await log_clinical_event(
+        request.app.state.pool,
+        "patient_data_exported",
+        clinic_id=str(clinic_uuid),
+        patient_email=email,
+        details={"patient_id": patient_id},
+    )
+    return {
+        "patient": serialize_patient(patient),
+        "offers": [
+            {
+                "id": row["id"],
+                "slot_id": row["slot_id"],
+                "status": row["status"],
+                "email_send_status": row["email_send_status"],
+                "sent_at": iso_or_none(row["sent_at"]),
+                "failed_at": iso_or_none(row["failed_at"]),
+                "created_at": iso_or_none(row["created_at"]),
+                "accepted_at": iso_or_none(row["accepted_at"]),
+                "declined_at": iso_or_none(row["declined_at"]),
+                "slot_time": iso_or_none(row["slot_time"]),
+                "clinician": row["clinician"],
+                "appointment_type": row["appointment_type"],
+            }
+            for row in offers
+        ],
+        "appointments": [serialize_appointment(row) for row in appointments],
+        "audit_summary": [
+            {
+                "event_type": row["event_type"],
+                "success": row["success"],
+                "created_at": iso_or_none(row["created_at"]),
+            }
+            for row in audit_rows
+        ],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2628,6 +3252,7 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
         log_clinical_event,
         pool,
         "offer_declined",
+        clinic_id=result.get("clinic_id"),
         slot_id=result["slot_id"],
         offer_id=result["offer_id"],
         patient_email=result["patient_email"],
@@ -3096,6 +3721,31 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         """)
 
         await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS email_send_status TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS email_provider_id TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS email_failed_reason TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE waitlist_offers
+        ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
         ALTER TABLE audit_log
         ADD COLUMN IF NOT EXISTS clinic_id UUID REFERENCES clinics(id) ON DELETE SET NULL;
         """)
@@ -3195,8 +3845,8 @@ async def create_waitlist_offers(
         ]
         await conn.executemany(
             """
-            INSERT INTO waitlist_offers (id, clinic_id, slot_id, patient_email, status, expires_at)
-            VALUES ($1, $2, $3, $4, 'sent', $5)
+            INSERT INTO waitlist_offers (id, clinic_id, slot_id, patient_email, status, expires_at, email_send_status)
+            VALUES ($1, $2, $3, $4, 'sent', $5, 'pending')
             """,
             rows,
         )
@@ -3399,6 +4049,34 @@ async def send_waitlist_offer_emails(pool: asyncpg.Pool, slot: asyncpg.Record, o
     api_key = (resend.api_key or "").strip()
     if not api_key or api_key == "re_your_key_here":
         logger.error("Resend is not configured; skipping %s outbound waitlist emails.", len(offers))
+        reason = "Resend API key is not configured"
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                """
+                UPDATE waitlist_offers
+                SET email_send_status = 'failed',
+                    failed_at = now(),
+                    email_failed_reason = $2
+                WHERE id = $1
+                """,
+                [(uuid.UUID(str(offer["id"])), reason) for offer in offers],
+            )
+        await asyncio.gather(
+            *(
+                log_clinical_event(
+                    pool,
+                    "email_send_failed",
+                    clinic_id=str(slot["clinic_id"]),
+                    slot_id=str(slot["id"]),
+                    offer_id=str(offer["id"]),
+                    patient_email=str(offer["patient_email"]),
+                    success=False,
+                    details={"reason": reason},
+                )
+                for offer in offers
+            ),
+            return_exceptions=True,
+        )
         return
 
     try:
@@ -3444,19 +4122,52 @@ async def send_offer_email_to_patient(
     async with SMTP_SEMAPHORE:
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 lambda: resend.Emails.send(payload),
             )
+            provider_id = None
+            if isinstance(result, dict):
+                provider_id = result.get("id")
+            elif hasattr(result, "id"):
+                provider_id = getattr(result, "id")
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE waitlist_offers
+                    SET email_send_status = 'sent',
+                        sent_at = now(),
+                        email_provider_id = $2,
+                        email_failed_reason = NULL,
+                        failed_at = NULL
+                    WHERE id = $1
+                    """,
+                    uuid.UUID(str(offer["id"])),
+                    clean_optional_text(provider_id),
+                )
         except Exception:
+            reason = "Email send failed"
             if "resend.dev" in from_email.lower():
                 logger.exception(
                     "Failed to send waitlist offer email to %s. Testing sender %s may only send to verified Resend recipients; verify swiftslot.org and use a domain sender.",
                     recipient,
                     from_email,
                 )
+                reason = "Test sender may only send to verified Resend recipients"
             else:
                 logger.exception("Failed to send waitlist offer email to %s", recipient)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE waitlist_offers
+                    SET email_send_status = 'failed',
+                        failed_at = now(),
+                        email_failed_reason = $2
+                    WHERE id = $1
+                    """,
+                    uuid.UUID(str(offer["id"])),
+                    reason[:240],
+                )
             await log_clinical_event(
                 pool,
                 "email_send_failed",
@@ -3465,7 +4176,7 @@ async def send_offer_email_to_patient(
                 offer_id=str(offer["id"]),
                 patient_email=recipient,
                 success=False,
-                details={"sender": from_email},
+                details={"sender": from_email, "reason": reason},
             )
 
 

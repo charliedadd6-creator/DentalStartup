@@ -124,6 +124,7 @@
                         <th>Type</th>
                         <th>Slot Value</th>
                         <th>Offers Sent</th>
+                        <th>Email Delivery</th>
                         <th>Status</th>
                         <th>Accepted By</th>
                         <th>Broadcast Time</th>
@@ -131,8 +132,8 @@
                 </thead>
                 <tbody id="broadcastRows">
                     <tr>
-                        <td colspan="8" style="text-align:center; padding:48px; color:#94a3b8;">
-                            No broadcasts yet. Start one from the Dashboard.
+                        <td colspan="9" style="text-align:center; padding:48px; color:#94a3b8;">
+                            Broadcast your first cancelled slot from the Dashboard.
                         </td>
                     </tr>
                 </tbody>
@@ -159,7 +160,7 @@
   }
   function money(pence){ return '£'+((pence||0)/100).toLocaleString('en-GB',{minimumFractionDigits:0,maximumFractionDigits:2}); }
   function empty(message){
-    return '<tr><td colspan="8" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
+    return '<tr><td colspan="9" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>';
   }
 
   fetch('/api/broadcasts')
@@ -175,14 +176,16 @@
 
       var body=byId('broadcastRows');
       if(!body) return;
-      if(!broadcasts.length){ body.innerHTML=empty('No broadcasts yet. Start one from the Dashboard.'); return; }
+      if(!broadcasts.length){ body.innerHTML=empty('Broadcast your first cancelled slot from the Dashboard.'); return; }
       body.innerHTML=broadcasts.map(function(row){
+        var delivery='Sent '+(row.sent_email_count||0)+' · Failed '+(row.failed_email_count||0);
         return '<tr>'+
           '<td>'+esc(fmtDate(row.slot_time))+'</td>'+
           '<td>'+esc(row.clinician)+'</td>'+
           '<td>'+esc(row.appointment_type)+'</td>'+
           '<td>'+esc(money(row.slot_value_pence))+'</td>'+
           '<td>'+esc(row.offers_sent)+'</td>'+
+          '<td>'+esc(delivery)+'</td>'+
           '<td>'+chip(row.status)+'</td>'+
           '<td>'+esc(row.accepted_by)+'</td>'+
           '<td>'+esc(fmtDate(row.created_at))+'</td>'+

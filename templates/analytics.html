@@ -104,6 +104,10 @@
                 <div class="metric-sub">All time</div>
             </div>
         </div>
+        <div class="empty-state" id="analyticsEmpty" style="display:none; background:white; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:16px;">
+            <h3>No analytics yet</h3>
+            <p>Analytics appear after broadcasts, offer responses, or appointments are created.</p>
+        </div>
         <div class="panels-grid">
             <div class="panel">
                 <div class="panel-head">
@@ -225,6 +229,9 @@
       setText('bookedAppointments', data.booked_appointments || 0);
       setText('completedAppointments', data.completed_appointments || 0);
       setText('missedAppointments', (data.cancelled_appointments || 0)+' / '+(data.no_show_appointments || 0));
+      var hasData=Number(data.total_broadcasts||0)>0 || Number(data.offers_sent||0)>0 || Number(data.booked_appointments||0)>0 || Number(data.completed_appointments||0)>0;
+      var empty=byId('analyticsEmpty');
+      if(empty) empty.style.display=hasData?'none':'block';
 
       var top=byId('topClinicians');
       if(!top) return;

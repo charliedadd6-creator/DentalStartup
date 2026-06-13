@@ -624,6 +624,35 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--gray-100);color:v
 .log-time{font-size:9px;color:rgba(255,255,255,0.2);font-family:monospace;flex-shrink:0;margin-top:2px}
 .log-empty{padding:18px;font-size:10px;color:rgba(255,255,255,0.15);font-family:monospace;text-align:center}
 
+.setup-panel,.activity-panel{
+  background:var(--white);border-radius:12px;
+  border:1px solid var(--gray-200);box-shadow:var(--shadow-sm);overflow:hidden;
+}
+.setup-head,.activity-head{
+  padding:12px 18px;border-bottom:1px solid var(--gray-100);
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.setup-title,.activity-title{font-size:12px;font-weight:700;color:var(--gray-800)}
+.setup-sub,.activity-sub{font-size:10px;color:var(--gray-400);margin-top:1px}
+.setup-toggle{
+  background:var(--gray-50);border:1px solid var(--gray-200);border-radius:6px;
+  padding:4px 8px;font-size:10px;font-weight:800;color:var(--gray-500);cursor:pointer;
+}
+.setup-body{padding:10px 18px 14px;display:grid;gap:7px}
+.setup-body.collapsed{display:none}
+.setup-row{display:flex;align-items:flex-start;gap:8px;font-size:11px;color:var(--gray-600);line-height:1.4}
+.setup-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px;background:var(--gray-300)}
+.setup-row.pass .setup-dot{background:var(--green-500)}
+.setup-row.warning .setup-dot{background:var(--amber-500)}
+.setup-row.fail .setup-dot{background:var(--red-500)}
+.setup-ready{font-size:11px;font-weight:700;color:var(--green-700);background:var(--green-100);border-radius:8px;padding:9px 10px}
+.activity-list{padding:6px 0;max-height:240px;overflow-y:auto}
+.activity-item{padding:8px 18px;border-bottom:1px solid var(--gray-50)}
+.activity-item:last-child{border-bottom:none}
+.activity-main{font-size:11px;font-weight:700;color:var(--gray-700)}
+.activity-meta{font-size:10px;color:var(--gray-400);margin-top:2px}
+.activity-empty{padding:18px;font-size:11px;color:var(--gray-400);text-align:center}
+
 /* ═══════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════ */
@@ -935,6 +964,20 @@ Logout
       <!-- RIGHT COLUMN -->
       <div class="right-col">
 
+        <!-- SETUP CHECKLIST -->
+        <div class="setup-panel">
+          <div class="setup-head">
+            <div>
+              <div class="setup-title">Setup Checklist</div>
+              <div class="setup-sub" id="setupSummary">Checking production readiness...</div>
+            </div>
+            <button class="setup-toggle" id="setupToggle" type="button">Hide</button>
+          </div>
+          <div class="setup-body" id="setupBody">
+            <div class="setup-row"><span class="setup-dot"></span><span>Loading setup checks...</span></div>
+          </div>
+        </div>
+
         <!-- STATUS PANEL -->
         <div class="status-panel">
           <div class="sp-head">
@@ -975,6 +1018,19 @@ Logout
           </div>
           <div class="log-scroll" id="logScroll">
             <div class="log-empty" id="logEmpty">Awaiting events...</div>
+          </div>
+        </div>
+
+        <!-- CLINIC ACTIVITY -->
+        <div class="activity-panel">
+          <div class="activity-head">
+            <div>
+              <div class="activity-title">Clinic Activity</div>
+              <div class="activity-sub">Latest audit events</div>
+            </div>
+          </div>
+          <div class="activity-list" id="activityTimeline">
+            <div class="activity-empty">Loading activity...</div>
           </div>
         </div>
 
@@ -1118,6 +1174,78 @@ window.location.href = '/login-page';
 .catch(function () {
 window.location.href = '/login-page';
 });
+}
+
+function friendlyActivityLabel(type){
+  return {
+    broadcast_dispatched:'Broadcast sent',
+    offer_accepted:'Offer accepted',
+    offer_declined:'Offer declined',
+    email_send_failed:'Email failed',
+    appointment_created:'Appointment created',
+    appointment_completed:'Appointment completed',
+    appointment_cancelled:'Appointment cancelled',
+    appointment_no_show:'Appointment no-show',
+    clinic_settings_updated:'Clinic settings updated',
+    patient_imported:'Patients imported',
+    appointment_imported:'Appointments imported',
+    patient_data_exported:'Patient data exported',
+    clinic_summary_exported:'Clinic summary exported'
+  }[type] || String(type || 'Activity').replace(/_/g,' ');
+}
+
+function renderReadiness(data){
+  var body=byId('setupBody');
+  var summary=byId('setupSummary');
+  if(!body) return;
+  var checks=(data && Array.isArray(data.checks)) ? data.checks : [];
+  var blockers=checks.filter(function(check){ return check.status!=='pass'; });
+  if(data && data.ready){
+    if(summary) summary.textContent='Ready for live clinic testing';
+    body.innerHTML='<div class="setup-ready">SwiftSlot is ready for live clinic testing.</div>';
+    return;
+  }
+  if(summary) summary.textContent=blockers.length+' setup step'+(blockers.length===1?'':'s')+' remaining';
+  body.innerHTML=(blockers.length?blockers:checks).map(function(check){
+    return '<div class="setup-row '+esc(check.status)+'"><span class="setup-dot"></span><span><strong>'+esc(check.label)+'</strong><br>'+esc(check.message)+'</span></div>';
+  }).join('') || '<div class="setup-row"><span class="setup-dot"></span><span>No readiness checks returned.</span></div>';
+}
+
+function loadReadiness(){
+  return fetch(API+'/api/system/readiness')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(renderReadiness)
+    .catch(function(err){
+      var body=byId('setupBody');
+      var summary=byId('setupSummary');
+      if(summary) summary.textContent='Could not check readiness';
+      if(body) body.innerHTML='<div class="setup-row fail"><span class="setup-dot"></span><span>'+esc(err.message)+'</span></div>';
+    });
+}
+
+function loadActivityTimeline(){
+  return fetch(API+'/api/activity?limit=10')
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      var box=byId('activityTimeline');
+      if(!box) return;
+      var events=Array.isArray(data.events)?data.events:[];
+      if(!events.length){
+        box.innerHTML='<div class="activity-empty">No activity yet.</div>';
+        return;
+      }
+      box.innerHTML=events.map(function(event){
+        var when=event.created_at ? new Date(event.created_at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+        return '<div class="activity-item">'+
+          '<div class="activity-main">'+esc(friendlyActivityLabel(event.event_type))+'</div>'+
+          '<div class="activity-meta">'+esc(when)+(event.success===false?' · Failed':'')+'</div>'+
+        '</div>';
+      }).join('');
+    })
+    .catch(function(){
+      var box=byId('activityTimeline');
+      if(box) box.innerHTML='<div class="activity-empty">Could not load activity.</div>';
+    });
 }
 
 /* ─── CLOCK & DATE ───────────────────────── */
@@ -1940,6 +2068,8 @@ document.getElementById('broadcastBtn').addEventListener('click',function(){
     setConn(true);
     saveState();
     loadDashboardMetrics();
+    loadReadiness();
+    loadActivityTimeline();
     loadWaitlistPatients().then(loadSmartRecommendations);
   })
   .catch(function(err){
@@ -1978,6 +2108,12 @@ function doRebroadcast(){
 }
 
 document.getElementById('resetBtn').addEventListener('click',doReset);
+document.getElementById('setupToggle').addEventListener('click',function(){
+  var body=document.getElementById('setupBody');
+  if(!body) return;
+  body.classList.toggle('collapsed');
+  this.textContent=body.classList.contains('collapsed')?'Show':'Hide';
+});
 
 /* ─── HEALTH CHECK ───────────────────────── */
 function healthCheck(){
@@ -2006,6 +2142,8 @@ function healthCheck(){
 loadState();
 renderTags();
 loadAppointmentTypes().then(function(){ return loadWaitlistPatients(); }).then(loadSmartRecommendations);
+loadReadiness();
+loadActivityTimeline();
 if(S.broadcast){
   if(S.broadcast.status==='locked'||S.broadcast.status==='accepted'){
     renderLocked({accepted_by:null,locked_at:null});
@@ -2025,6 +2163,7 @@ if(S.broadcast){
   loadDashboardMetrics();
 }
 healthCheck();
+setInterval(loadActivityTimeline,30000);
 
 })();
 </script>

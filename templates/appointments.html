@@ -56,6 +56,9 @@
         .field input, .field select, .field textarea { border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 10px; font-family: Inter, sans-serif; font-size: 13px; outline: none; }
         .field textarea { min-height: 72px; resize: vertical; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+        .topbar-actions { display: flex; gap: 10px; }
+        .import-help { font-size: 11px; color: #64748b; line-height: 1.5; margin-bottom: 8px; }
+        .import-result { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; font-size: 12px; color: #334155; max-height: 180px; overflow: auto; white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -79,7 +82,10 @@
             <div class="topbar-title">Appointments</div>
             <div class="topbar-sub">Booked, recovered, completed, cancelled, and no-show appointments</div>
         </div>
-        <button class="add-btn" id="openAppointmentModal">+ Add Manual Appointment</button>
+        <div class="topbar-actions">
+            <button class="ghost-btn" id="openAppointmentImport" type="button">Import Appointments</button>
+            <button class="add-btn" id="openAppointmentModal" type="button">+ Add Manual Appointment</button>
+        </div>
     </div>
     <div class="content">
         <div class="metrics-row">
@@ -132,9 +138,28 @@
         </form>
     </div>
 </div>
+<div class="modal-backdrop" id="appointmentImportModal">
+    <div class="modal">
+        <h2>Import Appointments</h2>
+        <div class="import-help">Paste CSV with columns: patient_name,patient_email,appointment_time,appointment_type,clinician,slot_value_pence,notes</div>
+        <div class="field full">
+            <label for="appointmentCsv">CSV rows</label>
+            <textarea id="appointmentCsv" style="min-height:160px;"></textarea>
+        </div>
+        <div class="msg err" id="appointmentImportError"></div>
+        <div class="import-result" id="appointmentImportResult">Preview results will appear here.</div>
+        <div class="modal-actions">
+            <button class="ghost-btn" type="button" id="closeAppointmentImport">Cancel</button>
+            <button class="ghost-btn" type="button" id="previewAppointmentImport">Preview</button>
+            <button class="add-btn" type="button" id="commitAppointmentImport" disabled>Commit Import</button>
+        </div>
+    </div>
+</div>
 <script>
 (function () {
   var currentStatus='';
+  var appointmentImportRows=[];
+  var appointmentImportPreviewOk=false;
   function byId(id){ return document.getElementById(id); }
   function setText(id,value){ var el=byId(id); if(el) el.textContent=value; }
   function esc(value){ return String(value == null || value === '' ? '—' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -144,6 +169,19 @@
   function chip(status){ var cls={booked:'chip-blue',completed:'chip-green',cancelled:'chip-red',no_show:'chip-amber'}[status]||'chip-gray'; return '<span class="chip '+cls+'">'+esc(status)+'</span>'; }
   function setMsg(text, cls){ var el=byId('appointmentsMsg'); el.textContent=text||''; el.className='msg '+(cls||''); }
   function empty(message){ return '<tr><td colspan="9" style="text-align:center; padding:48px; color:#94a3b8;">'+esc(message)+'</td></tr>'; }
+  function parseCsv(text){
+    var lines=String(text||'').split(/\r?\n/).map(function(line){ return line.trim(); }).filter(Boolean);
+    if(lines.length<2) return [];
+    var headers=lines[0].split(',').map(function(h){ return h.trim(); });
+    return lines.slice(1).map(function(line){
+      var values=line.split(',').map(function(v){ return v.trim(); });
+      var row={};
+      headers.forEach(function(header,index){ row[header]=values[index] || ''; });
+      if(row.slot_value_pence && row.slot_value_pence.indexOf('.')!==-1){ row.slot_value_pence=pence(row.slot_value_pence); }
+      else if(row.slot_value_pence){ row.slot_value_pence=Number(row.slot_value_pence); }
+      return row;
+    });
+  }
   function loadAppointmentTypes(){
     return fetch('/api/appointment-types').then(function(r){ return r.json(); }).then(function(data){
       byId('appointmentType').innerHTML='<option value="">Select appointment type</option>'+(data.appointment_types||[]).map(function(t){ return '<option value="'+esc(t)+'">'+esc(t)+'</option>'; }).join('');
@@ -159,7 +197,7 @@
       setText('countNoShow', rows.filter(function(a){ return a.status==='no_show'; }).length);
       setText('countRecovered', rows.filter(function(a){ return a.source==='recovered'; }).length);
       var body=byId('appointmentRows');
-      if(!rows.length){ body.innerHTML=empty('No appointments match this filter.'); return; }
+      if(!rows.length){ body.innerHTML=empty(currentStatus ? 'No appointments match this filter.' : 'Recovered and manually imported appointments will appear here.'); return; }
       body.innerHTML=rows.map(function(a){
         var actions=a.status==='booked'
           ? '<button class="action-btn" data-action="complete" data-id="'+esc(a.id)+'">Complete</button><button class="action-btn" data-action="cancel" data-id="'+esc(a.id)+'">Cancel</button><button class="action-btn" data-action="no-show" data-id="'+esc(a.id)+'">No-show</button>'
@@ -184,6 +222,51 @@
   });
   byId('openAppointmentModal').addEventListener('click',function(){ byId('appointmentModal').classList.add('show'); byId('appointmentError').textContent=''; });
   byId('closeAppointmentModal').addEventListener('click',function(){ byId('appointmentModal').classList.remove('show'); byId('appointmentForm').reset(); });
+  byId('openAppointmentImport').addEventListener('click',function(){
+    byId('appointmentImportModal').classList.add('show');
+    byId('appointmentImportError').textContent='';
+    byId('appointmentImportResult').textContent='Preview results will appear here.';
+    byId('commitAppointmentImport').disabled=true;
+    appointmentImportPreviewOk=false;
+  });
+  byId('closeAppointmentImport').addEventListener('click',function(){
+    byId('appointmentImportModal').classList.remove('show');
+    byId('appointmentCsv').value='';
+  });
+  byId('previewAppointmentImport').addEventListener('click',function(){
+    appointmentImportRows=parseCsv(byId('appointmentCsv').value);
+    byId('appointmentImportError').textContent='';
+    byId('commitAppointmentImport').disabled=true;
+    appointmentImportPreviewOk=false;
+    fetch('/api/appointments/import-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:appointmentImportRows})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Preview failed');
+        var data=res.data, summary=data.summary||{};
+        appointmentImportPreviewOk=(summary.valid||0)>0;
+        byId('commitAppointmentImport').disabled=!appointmentImportPreviewOk;
+        byId('appointmentImportResult').textContent=
+          'Valid rows: '+(summary.valid||0)+'\nInvalid rows: '+(summary.invalid||0)+'\n\nInvalid reasons:\n'+
+          (data.invalid_rows||[]).map(function(row){ return 'Row '+(row.index+2)+': '+row.reason; }).join('\n')+
+          '\n\nFirst valid rows:\n'+JSON.stringify((data.valid_rows||[]).slice(0,5), null, 2);
+      })
+      .catch(function(err){ byId('appointmentImportError').textContent=err.message || 'Preview failed'; });
+  });
+  byId('commitAppointmentImport').addEventListener('click',function(){
+    if(!appointmentImportPreviewOk) return;
+    var btn=this; btn.disabled=true; btn.textContent='Importing...';
+    fetch('/api/appointments/import-commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:appointmentImportRows})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,data:d}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Import failed');
+        var data=res.data;
+        byId('appointmentImportResult').textContent='Created appointments: '+(data.created_appointments||0)+'\nCreated patients: '+(data.created_patients||0)+'\nUpdated patients: '+(data.updated_patients||0)+'\nErrors: '+((data.errors||[]).length)+'\n\n'+JSON.stringify(data.errors||[], null, 2);
+        setMsg('Appointment import complete.','ok');
+        loadAppointments();
+      })
+      .catch(function(err){ byId('appointmentImportError').textContent=err.message || 'Import failed'; })
+      .finally(function(){ btn.disabled=false; btn.textContent='Commit Import'; });
+  });
   byId('appointmentForm').addEventListener('submit',function(e){
     e.preventDefault();
     var btn=byId('saveAppointmentBtn'); btn.disabled=true; btn.textContent='Saving...';

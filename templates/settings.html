@@ -41,6 +41,14 @@
         .msg.err { color: #b91c1c; }
         .sender-warning { display: none; border: 1px solid #fde68a; background: #fffbeb; color: #92400e; border-radius: 10px; padding: 11px 12px; font-size: 12px; line-height: 1.5; margin-bottom: 16px; }
         .sender-warning.show { display: block; }
+        .email-status-box { border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 10px; padding: 13px; font-size: 12px; color: #475569; line-height: 1.55; }
+        .email-status-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 8px; }
+        .email-status-label { font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #64748b; }
+        .email-status-value { font-weight: 700; color: #0f172a; word-break: break-word; }
+        .email-pill { font-size: 10px; font-weight: 800; border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
+        .email-pill.test { background: #fef3c7; color: #92400e; }
+        .email-pill.live { background: #dcfce7; color: #15803d; }
+        .env-code { margin-top: 10px; padding: 9px 10px; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
         @media (max-width: 760px) { body { display: block; } .sidebar { width: 100%; min-height: auto; } .grid { grid-template-columns: 1fr; } }
     </style>
 </head>
@@ -87,6 +95,25 @@
     <div class="content">
         <div class="sender-warning" id="senderWarning">
             Testing sender active. To email real patients, verify swiftslot.org in Resend and use a sender like appointments@swiftslot.org.
+        </div>
+        <div class="panel">
+            <div class="panel-head">
+                <div class="panel-head-title">Email Sending Status</div>
+                <div class="panel-head-sub">Delivery configuration for patient offer emails</div>
+            </div>
+            <div class="panel-body">
+                <div class="email-status-box">
+                    <div class="email-status-top">
+                        <div>
+                            <div class="email-status-label">Current sender</div>
+                            <div class="email-status-value" id="emailSenderValue">Loading...</div>
+                        </div>
+                        <span class="email-pill test" id="emailSenderMode">Checking</span>
+                    </div>
+                    <div id="emailSenderHelp">Checking sender readiness...</div>
+                    <div class="env-code">RESEND_FROM_EMAIL=SwiftSlot &lt;appointments@swiftslot.org&gt;</div>
+                </div>
+            </div>
         </div>
         <form id="settingsForm">
             <div class="panel">
@@ -178,6 +205,19 @@
     byId('gdprNotice').value=data.gdpr_notice || '';
     var warning=byId('senderWarning');
     if(warning) warning.className='sender-warning'+(data.email_sender_is_testing?' show':'');
+    var senderValue=byId('emailSenderValue');
+    var senderMode=byId('emailSenderMode');
+    var senderHelp=byId('emailSenderHelp');
+    if(senderValue) senderValue.textContent=data.email_sender || 'Not configured';
+    if(senderMode){
+      senderMode.textContent=data.email_sender_is_testing ? 'Test sender' : 'Domain sender';
+      senderMode.className='email-pill '+(data.email_sender_is_testing ? 'test' : 'live');
+    }
+    if(senderHelp){
+      senderHelp.innerHTML=data.email_sender_is_testing
+        ? 'The resend.dev sender can usually only send to your own verified Resend account email. To email real patients, verify swiftslot.org in Resend and switch to <a href="mailto:appointments@swiftslot.org">appointments@swiftslot.org</a>.'
+        : 'Sender is not using the resend.dev test domain. Keep your Resend domain verification active before live patient testing.';
+    }
   }
   fetch('/api/clinic/settings')
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
