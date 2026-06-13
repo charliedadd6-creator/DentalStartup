@@ -204,6 +204,16 @@
 </div>
 <script>
 (function () {
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function(){
+    return nativeFetch.apply(null, arguments).then(function(response){
+      if(response.status===401){
+        window.location.href='/login-page';
+        throw new Error('Please log in again.');
+      }
+      return response;
+    });
+  };
   function byId(id){ return document.getElementById(id); }
   function setText(id, value){ var el=byId(id); if(el) el.textContent=value; }
   function esc(value){

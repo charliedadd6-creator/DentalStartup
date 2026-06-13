@@ -77,24 +77,62 @@ button:hover{opacity:0.95}
     text-decoration:none;
     font-weight:600;
 }
+.error-box{
+    display:none;
+    margin-bottom:16px;
+    padding:10px 12px;
+    border-radius:8px;
+    background:#fee2e2;
+    color:#991b1b;
+    font-size:12px;
+    line-height:1.4;
+}
+.error-box.show{display:block}
 </style>
 </head>
 <body>
 <div class="auth-card">
     <div class="brand">SwiftSlot</div>
     <div class="subtitle">Create your clinic account</div>
-    <form method="post" action="/signup">
+    <div class="error-box" id="signupError"></div>
+    <form method="post" action="/signup" id="signupForm">
         <label>Clinic Name</label>
         <input type="text" name="clinic_name" required>
         <label>Email</label>
         <input type="email" name="email" required>
         <label>Password</label>
         <input type="password" name="password" required>
-        <button type="submit">Create Account</button>
+        <button type="submit" id="signupButton">Create Account</button>
     </form>
     <div class="switch">
         Already have an account? <a href="/login-page">Login</a>
     </div>
 </div>
+<script>
+(function(){
+  var form=document.getElementById('signupForm');
+  var error=document.getElementById('signupError');
+  var button=document.getElementById('signupButton');
+  function showError(message){ error.textContent=message; error.className='error-box show'; }
+  form.addEventListener('submit',function(event){
+    event.preventDefault();
+    error.className='error-box';
+    button.disabled=true;
+    button.textContent='Creating...';
+    fetch('/signup',{method:'POST',body:new FormData(form)})
+      .then(function(response){
+        if(response.redirected){ window.location.href=response.url; return null; }
+        if(response.ok){ window.location.href='/app/dashboard'; return null; }
+        return response.json().catch(function(){ return {}; }).then(function(data){
+          var message=data.error || 'Could not create account. Please try again.';
+          if(message.toLowerCase().indexOf('already exists')!==-1) message='An account with this email already exists. Please log in instead.';
+          throw new Error(message);
+        });
+      })
+      .catch(function(err){ showError(err.message || 'Could not create account. Please try again.'); })
+      .finally(function(){ button.disabled=false; button.textContent='Create Account'; });
+  });
+})();
+</script>
 </body>
 </html>

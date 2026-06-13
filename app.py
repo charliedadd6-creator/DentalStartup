@@ -17,7 +17,7 @@ from typing import Annotated
 import asyncpg
 import resend
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from models_auth import UserCreate, UserLogin, generate_uuid
 from pydantic import BaseModel, EmailStr, Field, ValidationError, field_validator
@@ -658,6 +658,18 @@ async def health_check(request: Request):
     }
 
 
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    return PlainTextResponse(
+        "User-agent: *\n"
+        "Disallow: /app/\n"
+        "Disallow: /api/\n"
+        "Disallow: /offer/\n"
+        "Disallow: /accept/\n"
+        "Disallow: /decline/\n"
+    )
+
+
 @app.get("/app/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     auth_redirect = require_auth(request)
@@ -869,9 +881,7 @@ async def api_system_readiness(request: Request):
 @app.get("/api/system/request-debug")
 async def api_system_request_debug(request: Request):
     if os.getenv("ALLOW_DEBUG_ENDPOINTS", "").lower() != "true":
-        auth_redirect = require_auth(request)
-        if auth_redirect:
-            raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=404, detail="Not found")
 
     return {
         "request_url": str(request.url),
@@ -1263,6 +1273,20 @@ async def update_appointment_status(conn, clinic_id: uuid.UUID, appointment_id: 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     now = datetime.now(timezone.utc)
+    current_status = await conn.fetchval(
+        """
+        SELECT status
+        FROM appointments
+        WHERE id = $1 AND clinic_id = $2
+        """,
+        appointment_id,
+        clinic_id,
+    )
+    if current_status is None:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    if current_status == "completed" and normalized_status in {"cancelled", "no_show"}:
+        raise HTTPException(status_code=400, detail="Completed appointments cannot be cancelled or marked no-show")
+
     timestamp_field = {
         "completed": "completed_at",
         "cancelled": "cancelled_at",
@@ -3195,7 +3219,7 @@ async def db_get_offer_with_slot(pool: asyncpg.Pool, offer_id: str) -> asyncpg.R
                 s.accepted_by   AS accepted_by,
                 s.locked_at     AS locked_at
             FROM waitlist_offers o
-            JOIN waitlist_slots  s ON s.id = o.slot_id
+            JOIN waitlist_slots  s ON s.id = o.slot_id AND s.clinic_id = o.clinic_id
             WHERE o.id = $1;
             """,
             parsed,
@@ -3223,7 +3247,7 @@ async def db_decline_offer(pool: asyncpg.Pool, offer_id: uuid.UUID) -> dict | No
                     s.id, s.clinic_id, s.slot_time, s.clinician, s.status, s.accepted_by,
                     COUNT(o.id) FILTER (WHERE o.status = 'sent') AS remaining_sent
                 FROM waitlist_slots  s
-                LEFT JOIN waitlist_offers o ON o.slot_id = s.id
+                LEFT JOIN waitlist_offers o ON o.slot_id = s.id AND o.clinic_id = s.clinic_id
                 WHERE s.id = $1
                 GROUP BY s.id;
                 """,
@@ -3322,6 +3346,10 @@ async def decline_offer(token: str, request: Request, background_tasks: Backgrou
 @app.post("/signup")
 async def signup(request: Request, clinic_name: str = Form(...), email: str = Form(...), password: str = Form(...)):
     pool = request.app.state.pool
+    normalized_email = email.lower().strip()
+    cleaned_clinic_name = clinic_name.strip()
+    if not cleaned_clinic_name:
+        return JSONResponse({"error": "Clinic name is required"}, status_code=400)
 
     try:
         hashed = hash_password(password)
@@ -3340,7 +3368,7 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
                     VALUES ($1, $2)
                     """,
                     clinic_id,
-                    clinic_name
+                    cleaned_clinic_name
                 )
 
                 await conn.execute(
@@ -3350,7 +3378,7 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
                     """,
                     user_id,
                     clinic_id,
-                    email.lower().strip(),
+                    normalized_email,
                     hashed
                 )
 
@@ -3369,6 +3397,7 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
 @app.post("/login")
 async def login(request: Request, email: str = Form(...), password: str = Form(...)):
     pool = request.app.state.pool
+    normalized_email = email.lower().strip()
 
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
@@ -3377,7 +3406,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
             FROM users
             WHERE email = $1
             """,
-            email
+            normalized_email
         )
 
     if not user:

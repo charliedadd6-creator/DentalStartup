@@ -77,22 +77,58 @@ button:hover{opacity:0.95}
     text-decoration:none;
     font-weight:600;
 }
+.error-box{
+    display:none;
+    margin-bottom:16px;
+    padding:10px 12px;
+    border-radius:8px;
+    background:#fee2e2;
+    color:#991b1b;
+    font-size:12px;
+    line-height:1.4;
+}
+.error-box.show{display:block}
 </style>
 </head>
 <body>
 <div class="auth-card">
     <div class="brand">SwiftSlot</div>
     <div class="subtitle">Sign in to your clinic dashboard</div>
-    <form method="post" action="/login">
+    <div class="error-box" id="loginError"></div>
+    <form method="post" action="/login" id="loginForm">
         <label>Email</label>
         <input type="email" name="email" required>
         <label>Password</label>
         <input type="password" name="password" required>
-        <button type="submit">Login</button>
+        <button type="submit" id="loginButton">Login</button>
     </form>
     <div class="switch">
         Don’t have an account? <a href="/signup-page">Create one</a>
     </div>
 </div>
+<script>
+(function(){
+  var form=document.getElementById('loginForm');
+  var error=document.getElementById('loginError');
+  var button=document.getElementById('loginButton');
+  function showError(message){ error.textContent=message; error.className='error-box show'; }
+  form.addEventListener('submit',function(event){
+    event.preventDefault();
+    error.className='error-box';
+    button.disabled=true;
+    button.textContent='Signing in...';
+    fetch('/login',{method:'POST',body:new FormData(form)})
+      .then(function(response){
+        if(response.redirected){ window.location.href=response.url; return null; }
+        if(response.ok){ window.location.href='/app/dashboard'; return null; }
+        return response.json().catch(function(){ return {}; }).then(function(data){
+          throw new Error(response.status===401 ? 'Incorrect email or password.' : (data.error || 'Could not sign in. Please try again.'));
+        });
+      })
+      .catch(function(err){ showError(err.message || 'Could not sign in. Please try again.'); })
+      .finally(function(){ button.disabled=false; button.textContent='Login'; });
+  });
+})();
+</script>
 </body>
 </html>

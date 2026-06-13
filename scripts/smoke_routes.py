@@ -12,17 +12,25 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/swi
 os.environ.setdefault("RENDER_EXTERNAL_URL", "http://localhost:8000")
 
 REQUIRED_PATHS = {
-    "/api/clinic/settings",
+    "/",
+    "/health",
+    "/login-page",
+    "/signup-page",
+    "/app/dashboard",
+    "/app/waitlist",
+    "/app/broadcasts",
+    "/app/appointments",
+    "/app/analytics",
+    "/app/settings",
+    "/broadcast",
     "/api/me",
+    "/api/clinic/settings",
     "/api/patients",
     "/api/appointments",
-    "/api/appointments/import-preview",
-    "/api/appointments/import-commit",
-    "/api/patients/import-preview",
-    "/api/patients/import-commit",
     "/api/recovery/recommendations",
     "/api/system/readiness",
     "/api/activity",
+    "/api/export/clinic-summary",
 }
 
 

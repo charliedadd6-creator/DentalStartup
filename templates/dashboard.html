@@ -1043,6 +1043,17 @@ Logout
 (function(){
 'use strict';
 
+var nativeFetch = window.fetch.bind(window);
+window.fetch = function(){
+  return nativeFetch.apply(null, arguments).then(function(response){
+    if(response.status===401){
+      window.location.href='/login-page';
+      throw new Error('Please log in again.');
+    }
+    return response;
+  });
+};
+
 /* ─── CONFIG ─────────────────────────────── */
 var API      = window.location.origin;
 var POLL_MS  = 8000;
