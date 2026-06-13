@@ -934,11 +934,28 @@ async def api_me(request: Request):
 
 
 async def backfill_recovered_appointments(pool: asyncpg.Pool) -> None:
+    backfilled = 0
+    skipped_legacy = 0
     try:
         async with pool.acquire() as conn:
+            skipped_legacy = await conn.fetchval(
+                """
+                SELECT COUNT(*)::int
+                FROM waitlist_slots
+                WHERE clinic_id IS NULL
+                  AND accepted_by IS NOT NULL
+                """
+            ) or 0
+            if skipped_legacy:
+                logger.warning(
+                    "Skipping %s recovered appointment backfill row(s) for legacy slots without clinic_id",
+                    skipped_legacy,
+                )
+
             rows = await conn.fetch(
                 """
                 SELECT
+                    s.id AS id,
                     s.clinic_id, p.id AS patient_id, s.accepted_by,
                     TRIM(CONCAT(COALESCE(p.first_name, ''), ' ', COALESCE(p.last_name, ''))) AS patient_name,
                     s.id AS slot_id, s.appointment_type, s.clinician,
@@ -947,43 +964,61 @@ async def backfill_recovered_appointments(pool: asyncpg.Pool) -> None:
                 LEFT JOIN patients p
                   ON p.clinic_id = s.clinic_id
                  AND lower(p.email) = lower(s.accepted_by)
-                WHERE s.accepted_by IS NOT NULL
+                WHERE s.clinic_id IS NOT NULL
+                  AND s.accepted_by IS NOT NULL
                   AND (s.status = 'locked' OR s.accepted_by IS NOT NULL)
                   AND NOT EXISTS (
                     SELECT 1 FROM appointments a WHERE a.slot_id = s.id
                   );
                 """
             )
-            values = [
-                (
-                    uuid.uuid4(),
-                    row["clinic_id"],
-                    row["patient_id"],
-                    row["accepted_by"],
-                    clean_optional_string(row["patient_name"]),
-                    row["slot_id"],
-                    row["appointment_type"],
-                    row["clinician"],
-                    row["slot_time"],
-                    row["slot_value_pence"],
-                )
-                for row in rows
-            ]
-            if values:
-                await conn.executemany(
-                    """
-                    INSERT INTO appointments (
-                        id, clinic_id, patient_id, patient_email, patient_name, slot_id,
-                        source, appointment_type, clinician, appointment_time,
-                        slot_value_pence, status
+
+            for row in rows:
+                if not row["clinic_id"]:
+                    skipped_legacy += 1
+                    logger.warning(
+                        "Skipping recovered appointment backfill for legacy slot without clinic_id: %s",
+                        row["id"],
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, 'recovered', $7, $8, $9, $10, 'booked')
-                    ON CONFLICT DO NOTHING
-                    """,
-                    values,
-                )
+                    continue
+
+                try:
+                    result = await conn.execute(
+                        """
+                        INSERT INTO appointments (
+                            id, clinic_id, patient_id, patient_email, patient_name, slot_id,
+                            source, appointment_type, clinician, appointment_time,
+                            slot_value_pence, status
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, 'recovered', $7, $8, $9, $10, 'booked')
+                        ON CONFLICT DO NOTHING
+                        """,
+                        uuid.uuid4(),
+                        row["clinic_id"],
+                        row["patient_id"],
+                        row["accepted_by"],
+                        clean_optional_string(row["patient_name"]),
+                        row["slot_id"],
+                        row["appointment_type"],
+                        row["clinician"],
+                        row["slot_time"],
+                        row["slot_value_pence"],
+                    )
+                    if result.endswith(" 1"):
+                        backfilled += 1
+                except Exception:
+                    logger.exception(
+                        "Failed to backfill recovered appointment for slot %s",
+                        row["id"],
+                    )
+                    continue
+            logger.info(
+                "Recovered appointment backfill complete: %s backfilled, %s legacy rows skipped",
+                backfilled,
+                skipped_legacy,
+            )
     except Exception:
-        logger.exception("Failed to backfill recovered appointments")
+        logger.exception("Failed to scan recovered appointments for backfill")
 
 
 async def fetch_appointment(conn, appointment_id: uuid.UUID, clinic_id: uuid.UUID):
