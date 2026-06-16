@@ -76,6 +76,10 @@ APPOINTMENT_TYPES = [
 PATIENT_LIFECYCLE_STATUSES = {"waitlist", "booked", "completed", "archived"}
 APPOINTMENT_STATUSES = {"booked", "completed", "cancelled", "no_show"}
 APPOINTMENT_SOURCES = {"manual", "recovered", "import", "integration"}
+ACCESS_REQUEST_STATUSES = {"new", "contacted", "qualified", "rejected", "converted"}
+USER_ROLES = {"clinic_user", "clinic_admin", "founder_admin"}
+PILOT_STATUSES = {"setup", "testing", "live", "paused", "churned"}
+DEMO_SEED_MARKER = "demo_seed"
 
 
 def safe_int(value, default=0):
@@ -102,6 +106,13 @@ def clean_optional_string(value):
 
 def clean_optional_text(value):
     return clean_optional_string(value)
+
+
+def clean_limited_text(value, max_length: int = 2000):
+    cleaned = clean_optional_string(value)
+    if cleaned is None:
+        return None
+    return cleaned[:max_length]
 
 
 def normalize_email(value) -> str | None:
@@ -150,6 +161,56 @@ def normalize_lifecycle_status(value) -> str:
 
 def get_resend_from_email() -> str:
     return os.getenv("RESEND_FROM_EMAIL", "SwiftSlot <onboarding@resend.dev>")
+
+
+def founder_admin_emails() -> set[str]:
+    raw = os.getenv("FOUNDER_ADMIN_EMAILS", "")
+    return {email.strip().lower() for email in raw.split(",") if email.strip()}
+
+
+def is_demo_seed_enabled() -> bool:
+    return (
+        os.getenv("ALLOW_DEBUG_ENDPOINTS", "").lower() == "true"
+        or os.getenv("ALLOW_DEMO_SEED", "").lower() == "true"
+    )
+
+
+def normalize_user_role(value) -> str:
+    cleaned = (clean_optional_string(value) or "clinic_user").lower()
+    if cleaned not in USER_ROLES:
+        return "clinic_user"
+    return cleaned
+
+
+def normalize_access_request_status(value) -> str:
+    cleaned = (clean_optional_string(value) or "new").lower()
+    if cleaned not in ACCESS_REQUEST_STATUSES:
+        raise ValueError("status must be new, contacted, qualified, rejected, or converted")
+    return cleaned
+
+
+def normalize_pilot_status(value) -> str:
+    cleaned = (clean_optional_string(value) or "setup").lower()
+    if cleaned not in PILOT_STATUSES:
+        raise ValueError("pilot_status must be setup, testing, live, paused, or churned")
+    return cleaned
+
+
+def is_founder_admin(request: Request) -> bool:
+    if not request.session.get("user_id"):
+        return False
+    if normalize_user_role(request.session.get("user_role")) == "founder_admin":
+        return True
+    session_email = (request.session.get("user_email") or "").strip().lower()
+    return bool(session_email and session_email in founder_admin_emails())
+
+
+def require_founder_admin(request: Request) -> None:
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not is_founder_admin(request):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def normalize_appointment_status(value) -> str:
@@ -303,6 +364,76 @@ class ClinicSettingsUpdate(BaseModel):
         if value is None:
             return None
         return clamp_expiry_minutes(value)
+
+
+class AccessRequestCreate(BaseModel):
+    clinic_name: str | None = None
+    contact_name: str
+    contact_email: EmailStr
+    phone: str | None = None
+    practice_type: str | None = None
+    practice_size: str | None = None
+    message: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("clinic_name", "phone", "practice_type", "practice_size", mode="before")
+    @classmethod
+    def normalize_optional_access_string(cls, value):
+        return clean_optional_string(value)
+
+    @field_validator("contact_name", mode="before")
+    @classmethod
+    def normalize_required_access_string(cls, value):
+        cleaned = clean_optional_string(value)
+        if cleaned is None:
+            raise ValueError("contact_name is required")
+        return cleaned
+
+    @field_validator("contact_email", mode="before")
+    @classmethod
+    def normalize_access_email(cls, value):
+        cleaned = clean_optional_string(value)
+        if cleaned is None:
+            raise ValueError("contact_email is required")
+        return cleaned.lower()
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def normalize_access_message(cls, value):
+        return clean_limited_text(value, 2000)
+
+
+class AccessRequestUpdate(BaseModel):
+    status: str | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value):
+        if value is None:
+            return None
+        return normalize_access_request_status(value)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def normalize_notes(cls, value):
+        return clean_limited_text(value, 4000)
+
+
+class ClinicOnboardingUpdate(BaseModel):
+    onboarding_step: str | None = None
+    pilot_status: str | None = None
+
+    @field_validator("onboarding_step", mode="before")
+    @classmethod
+    def normalize_onboarding_step(cls, value):
+        return clean_limited_text(value, 120)
+
+    @field_validator("pilot_status", mode="before")
+    @classmethod
+    def normalize_onboarding_status(cls, value):
+        if value is None:
+            return None
+        return normalize_pilot_status(value)
 
 
 class PatientCreate(BaseModel):
@@ -499,7 +630,15 @@ async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
                 reply_to_email,
                 default_slot_value_pence,
                 default_expiry_minutes,
-                gdpr_notice
+                gdpr_notice,
+                onboarding_completed_at,
+                onboarding_step,
+                pilot_status,
+                (
+                    SELECT COUNT(*)::int
+                    FROM waitlist_offers
+                    WHERE clinic_id = clinics.id AND email_send_status = 'failed'
+                ) AS recent_email_failures
             FROM clinics
             WHERE id = $1
             """,
@@ -526,6 +665,11 @@ async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
         "gdpr_notice": row["gdpr_notice"] or DEFAULT_GDPR_NOTICE,
         "email_sender": email_sender,
         "email_sender_is_testing": "resend.dev" in email_sender.lower(),
+        "onboarding_completed_at": iso_or_none(row["onboarding_completed_at"]),
+        "onboarding_step": row["onboarding_step"],
+        "pilot_status": row["pilot_status"] or "setup",
+        "demo_seed_enabled": is_demo_seed_enabled(),
+        "recent_email_failures": safe_int(row["recent_email_failures"], 0),
     }
 
 
@@ -635,6 +779,40 @@ async def login_page():
 async def signup_page():
     html = (BASE_DIR / "templates" / "signup.html").read_text()
     return HTMLResponse(html)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        return auth_redirect
+    if not is_founder_admin(request):
+        raise HTTPException(status_code=404, detail="Not found")
+    html = (BASE_DIR / "templates" / "admin.html").read_text()
+    return HTMLResponse(html)
+
+
+@app.post("/api/access-request")
+async def api_access_request(payload: AccessRequestCreate, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO access_requests (
+                id, clinic_name, contact_name, contact_email, phone,
+                practice_type, practice_size, message, status, source
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', 'landing')
+            """,
+            uuid.uuid4(),
+            payload.clinic_name,
+            payload.contact_name,
+            str(payload.contact_email).lower().strip(),
+            payload.phone,
+            payload.practice_type,
+            payload.practice_size,
+            payload.message,
+        )
+    return {"ok": True, "message": "Thanks — we’ll be in touch."}
 
 
 @app.get("/health")
@@ -752,12 +930,20 @@ def env_is_placeholder(value: str | None, dev_fallbacks: set[str] | None = None)
     return any(token in lowered for token in ["your_key_here", "placeholder", "change-this", "changeme", "example"])
 
 
-def readiness_check(key: str, label: str, ok: bool, message: str, warning: bool = False) -> dict:
+def readiness_check(
+    key: str,
+    label: str,
+    ok: bool,
+    message: str,
+    warning: bool = False,
+    suggested_next_action: str | None = None,
+) -> dict:
     return {
         "key": key,
         "label": label,
         "status": "pass" if ok and not warning else "warning" if ok and warning else "fail",
         "message": message,
+        "suggested_next_action": None if ok and not warning else (suggested_next_action or message),
     }
 
 
@@ -771,7 +957,8 @@ async def api_system_readiness(request: Request):
     async with request.app.state.pool.acquire() as conn:
         clinic = await conn.fetchrow(
             """
-            SELECT display_name, reply_to_email, contact_email, default_expiry_minutes
+            SELECT display_name, reply_to_email, contact_email, default_expiry_minutes,
+                   onboarding_completed_at, onboarding_step, pilot_status
             FROM clinics
             WHERE id = $1
             """,
@@ -781,7 +968,10 @@ async def api_system_readiness(request: Request):
             """
             SELECT
                 (SELECT COUNT(*)::int FROM patients WHERE clinic_id = $1 AND consent_status = 'consented' AND archived_at IS NULL) AS consented_patients,
-                (SELECT COUNT(*)::int FROM appointments WHERE clinic_id = $1 AND source IN ('recovered', 'manual', 'import')) AS appointments
+                (SELECT COUNT(*)::int FROM waitlist_slots WHERE clinic_id = $1) AS broadcasts,
+                (SELECT COUNT(*)::int FROM waitlist_offers WHERE clinic_id = $1 AND email_send_status = 'failed') AS failed_emails,
+                (SELECT COUNT(*)::int FROM appointments WHERE clinic_id = $1 AND source IN ('recovered', 'manual', 'import')) AS appointments,
+                (SELECT COUNT(*)::int FROM appointments WHERE clinic_id = $1 AND source = 'recovered') AS recovered_appointments
             """,
             clinic_uuid,
         )
@@ -804,32 +994,37 @@ async def api_system_readiness(request: Request):
         readiness_check(
             "clinic_settings",
             "Clinic settings completed",
-            bool(clinic and clean_optional_string(clinic["display_name"])),
-            "Clinic display name is set." if clinic and clean_optional_string(clinic["display_name"]) else "Complete clinic display name in Settings.",
+            bool(clinic and clean_optional_string(clinic["display_name"]) and clean_optional_string(clinic["contact_email"])),
+            "Clinic display name and contact email are set." if clinic and clean_optional_string(clinic["display_name"]) and clean_optional_string(clinic["contact_email"]) else "Complete clinic display name and contact email in Settings.",
+            suggested_next_action="Add the clinic display name and contact email in Settings.",
         ),
         readiness_check(
             "reply_to_email",
             "Reply-to email configured",
             bool(clinic and clean_optional_string(clinic["reply_to_email"])),
             "Reply-to email is available." if clinic and clean_optional_string(clinic["reply_to_email"]) else "Add a reply-to email in Settings.",
+            suggested_next_action="Add the reply-to inbox pilots should use for patient replies.",
         ),
         readiness_check(
             "default_expiry_minutes",
             "Default offer expiry set",
             5 <= default_expiry <= 1440,
             "Default expiry is within the allowed live range." if 5 <= default_expiry <= 1440 else "Set default expiry between 5 and 1440 minutes.",
+            suggested_next_action="Set a default offer expiry between 5 minutes and 24 hours.",
         ),
         readiness_check(
             "resend_api_key",
             "Resend API key configured",
             not env_is_placeholder(resend_key, {"re_your_key_here"}),
             "Resend API key is configured." if not env_is_placeholder(resend_key, {"re_your_key_here"}) else "Set RESEND_API_KEY to a live Resend key.",
+            suggested_next_action="Set RESEND_API_KEY before sending pilot emails.",
         ),
         readiness_check(
             "resend_from_email",
-            "Sender email configured",
-            bool(clean_optional_string(resend_from_env)),
-            "Sender email is configured." if clean_optional_string(resend_from_env) else "Set RESEND_FROM_EMAIL.",
+            "Email sender not testing",
+            bool(clean_optional_string(resend_from_env)) and "resend.dev" not in (resend_from or "").lower(),
+            "Sender is configured with a non-testing domain." if clean_optional_string(resend_from_env) and "resend.dev" not in (resend_from or "").lower() else "Verify a sending domain and stop using the resend.dev test sender.",
+            suggested_next_action="Set RESEND_FROM_EMAIL to a verified domain sender before live pilots.",
         ),
         readiness_check(
             "resend_domain",
@@ -837,45 +1032,74 @@ async def api_system_readiness(request: Request):
             True,
             "Sender is using a clinic/domain sender." if "resend.dev" not in (resend_from or "").lower() else "Verify sending domain and stop using the resend.dev test sender.",
             warning="resend.dev" in (resend_from or "").lower(),
+            suggested_next_action="Verify the Resend sending domain and switch away from resend.dev.",
         ),
         readiness_check(
             "token_secret",
             "Token secret configured",
             not env_is_placeholder(token_secret, {"dev-token-secret-change-this"}),
             "TOKEN_SECRET is configured." if not env_is_placeholder(token_secret, {"dev-token-secret-change-this"}) else "Set TOKEN_SECRET to a strong production value.",
+            suggested_next_action="Set TOKEN_SECRET to a strong non-placeholder value.",
         ),
         readiness_check(
             "session_secret",
             "Session secret configured",
             not env_is_placeholder(session_secret, {"dev-secret-change-this"}),
             "SESSION_SECRET is configured." if not env_is_placeholder(session_secret, {"dev-secret-change-this"}) else "Set SESSION_SECRET to a strong production value.",
+            suggested_next_action="Set SESSION_SECRET to a strong non-placeholder value.",
         ),
         readiness_check(
             "render_external_url",
             "Production URL uses HTTPS",
             render_https_ok,
             "Production external URL is HTTPS." if render_https_ok else "Set RENDER_EXTERNAL_URL to an https:// URL in production.",
+            suggested_next_action="Use an https:// RENDER_EXTERNAL_URL in production.",
         ),
         readiness_check(
             "consented_patients",
             "Consented waitlist patients added",
             safe_int(counts["consented_patients"], 0) > 0 if counts else False,
             "At least one consented waitlist patient exists." if counts and safe_int(counts["consented_patients"], 0) > 0 else "Add or import consented patients.",
+            suggested_next_action="Add a consented patient manually or import a waitlist CSV.",
         ),
         readiness_check(
             "appointment_types",
             "Appointment types available",
             len(APPOINTMENT_TYPES) > 0,
             "Appointment types are available." if APPOINTMENT_TYPES else "Add at least one appointment type.",
+            suggested_next_action="Configure at least one appointment type.",
+        ),
+        readiness_check(
+            "broadcasts",
+            "At least one broadcast sent",
+            safe_int(counts["broadcasts"], 0) > 0 if counts else False,
+            "At least one recovery broadcast has been created." if counts and safe_int(counts["broadcasts"], 0) > 0 else "Send a test broadcast to a safe pilot recipient.",
+            suggested_next_action="Send the first test broadcast from the dashboard.",
         ),
         readiness_check(
             "appointments",
-            "Appointment workflow has data",
-            safe_int(counts["appointments"], 0) > 0 if counts else False,
-            "At least one appointment has been created or recovered." if counts and safe_int(counts["appointments"], 0) > 0 else "Create, import, or recover an appointment.",
+            "Appointment or recovered slot exists",
+            safe_int(counts["appointments"], 0) > 0 or safe_int(counts["recovered_appointments"], 0) > 0 if counts else False,
+            "At least one appointment has been created or recovered." if counts and (safe_int(counts["appointments"], 0) > 0 or safe_int(counts["recovered_appointments"], 0) > 0) else "Create, import, or recover an appointment.",
+            suggested_next_action="Create an appointment record or recover a broadcast slot.",
+        ),
+        readiness_check(
+            "onboarding_status",
+            "Onboarding status live-ready",
+            clinic and (clinic["pilot_status"] in {"testing", "live"} or clinic["onboarding_completed_at"] is not None),
+            "Clinic onboarding is in pilot testing or live." if clinic and (clinic["pilot_status"] in {"testing", "live"} or clinic["onboarding_completed_at"] is not None) else "Move onboarding status to testing or live when setup is complete.",
+            warning=bool(clinic and clinic["pilot_status"] == "testing" and clinic["onboarding_completed_at"] is None),
+            suggested_next_action="Update onboarding status when the clinic is ready for pilot testing.",
         ),
     ]
-    return {"ready": all(check["status"] == "pass" for check in checks), "checks": checks}
+    return {
+        "ready": all(check["status"] == "pass" for check in checks),
+        "checks": checks,
+        "demo_seed_enabled": is_demo_seed_enabled(),
+        "pilot_status": clinic["pilot_status"] if clinic else "setup",
+        "onboarding_step": clinic["onboarding_step"] if clinic else None,
+        "onboarding_completed_at": iso_or_none(clinic["onboarding_completed_at"]) if clinic else None,
+    }
 
 
 @app.get("/api/system/request-debug")
@@ -946,6 +1170,45 @@ async def api_update_clinic_settings(update: ClinicSettingsUpdate, request: Requ
     return settings_data
 
 
+@app.patch("/api/clinic/onboarding")
+async def api_update_clinic_onboarding(update: ClinicOnboardingUpdate, request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clinic_id = get_session_clinic_id(request)
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    payload = update.model_dump(exclude_unset=True)
+    fields = [field for field in update.model_fields_set if field in {"onboarding_step", "pilot_status"}]
+    if fields:
+        assignments = []
+        values = []
+        for index, field in enumerate(fields, start=1):
+            assignments.append(f"{field} = ${index}")
+            values.append(payload.get(field))
+        if payload.get("pilot_status") == "live":
+            assignments.append("onboarding_completed_at = COALESCE(onboarding_completed_at, now())")
+        assignments.append("updated_at = now()")
+        values.append(clinic_uuid)
+        async with request.app.state.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                UPDATE clinics
+                SET {", ".join(assignments)}
+                WHERE id = ${len(values)}
+                """,
+                *values,
+            )
+        await log_clinical_event(
+            request.app.state.pool,
+            "clinic_onboarding_updated",
+            clinic_id=clinic_id,
+            client_ip=request.client.host if request.client else None,
+            details={"fields": sorted(fields), "pilot_status": payload.get("pilot_status")},
+        )
+    return await get_clinic_settings(request.app.state.pool, clinic_id)
+
+
 @app.get("/api/me")
 async def api_me(request: Request):
     auth_redirect = require_auth(request)
@@ -955,8 +1218,12 @@ async def api_me(request: Request):
     clinic_id = get_session_clinic_id(request)
     return {
         "user_id": request.session.get("user_id"),
+        "email": request.session.get("user_email"),
+        "role": "founder_admin" if is_founder_admin(request) else normalize_user_role(request.session.get("user_role")),
+        "is_founder_admin": is_founder_admin(request),
         "clinic_id": clinic_id,
         "clinic": await get_clinic_settings(request.app.state.pool, clinic_id),
+        "demo_seed_enabled": is_demo_seed_enabled(),
     }
 
 
@@ -1927,6 +2194,49 @@ def parse_audit_details(value) -> dict | str | None:
         return str(value)
 
 
+async def build_support_summary(pool: asyncpg.Pool, clinic_id: str) -> dict:
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    clinic_settings = await get_clinic_settings(pool, clinic_id)
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*)::int FROM patients WHERE clinic_id = $1 AND archived_at IS NULL) AS patient_count,
+                (SELECT COUNT(*)::int FROM waitlist_slots WHERE clinic_id = $1) AS broadcast_count,
+                (SELECT COUNT(*)::int FROM appointments WHERE clinic_id = $1) AS appointment_count,
+                (SELECT COUNT(*)::int FROM waitlist_offers WHERE clinic_id = $1 AND email_send_status = 'failed') AS email_failed_count,
+                (SELECT COUNT(*)::int FROM waitlist_slots WHERE clinic_id = $1 AND (status = 'locked' OR accepted_by IS NOT NULL)) AS recovered_count
+            """,
+            clinic_uuid,
+        )
+    settings_complete = all(
+        clean_optional_string(clinic_settings.get(field))
+        for field in ["clinic_name", "contact_email", "reply_to_email"]
+    )
+    ready = (
+        settings_complete
+        and not clinic_settings.get("email_sender_is_testing")
+        and safe_int(totals["patient_count"], 0) > 0
+        and safe_int(totals["broadcast_count"], 0) > 0
+        and clinic_settings.get("pilot_status") in {"testing", "live"}
+    )
+    return {
+        "clinic_id": clinic_settings["clinic_id"],
+        "clinic_name": clinic_settings["clinic_name"],
+        "clinic_settings_complete": settings_complete,
+        "pilot_status": clinic_settings.get("pilot_status"),
+        "onboarding_step": clinic_settings.get("onboarding_step"),
+        "onboarding_completed_at": clinic_settings.get("onboarding_completed_at"),
+        "patient_count": totals["patient_count"] if totals else 0,
+        "broadcast_count": totals["broadcast_count"] if totals else 0,
+        "appointment_count": totals["appointment_count"] if totals else 0,
+        "email_failed_count": totals["email_failed_count"] if totals else 0,
+        "recovered_count": totals["recovered_count"] if totals else 0,
+        "readiness_status": "ready" if ready else "needs_setup",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.get("/api/activity")
 async def api_activity(request: Request, limit: int = 50, event_type: str | None = None):
     auth_redirect = require_auth(request)
@@ -1966,6 +2276,433 @@ async def api_activity(request: Request, limit: int = 50, event_type: str | None
             for row in rows
         ]
     }
+
+
+@app.get("/api/admin/overview")
+async def api_admin_overview(request: Request):
+    require_founder_admin(request)
+    async with request.app.state.pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*)::int FROM clinics) AS total_clinics,
+                (SELECT COUNT(*)::int FROM users) AS total_users,
+                (SELECT COUNT(*)::int FROM patients WHERE archived_at IS NULL) AS total_patients,
+                (SELECT COUNT(*)::int FROM waitlist_slots) AS total_broadcasts,
+                (SELECT COUNT(*)::int FROM waitlist_offers) AS total_offers,
+                (SELECT COUNT(*)::int FROM appointments) AS total_appointments,
+                (SELECT COUNT(*)::int FROM appointments WHERE source = 'recovered') AS total_recovered_appointments,
+                (SELECT COALESCE(SUM(slot_value_pence), 0)::int FROM waitlist_slots WHERE status = 'locked' OR accepted_by IS NOT NULL) AS total_revenue_saved_pence,
+                (SELECT COUNT(*)::int FROM access_requests WHERE status = 'new') AS new_access_requests_count,
+                (SELECT COUNT(*)::int FROM waitlist_offers WHERE email_send_status = 'failed') AS email_failures_count
+            """
+        )
+        failures = await conn.fetch(
+            """
+            SELECT id::text, clinic_id::text, event_type, success, details, created_at
+            FROM audit_log
+            WHERE event_type = 'email_send_failed'
+            ORDER BY created_at DESC
+            LIMIT 10
+            """
+        )
+    payload = dict(totals) if totals else {}
+    payload["total_failed_emails"] = payload.get("email_failures_count", 0)
+    payload["latest_failed_email_events"] = [
+        {
+            "id": row["id"],
+            "clinic_id": row["clinic_id"],
+            "event_type": row["event_type"],
+            "success": row["success"],
+            "details": parse_audit_details(row["details"]),
+            "created_at": iso_or_none(row["created_at"]),
+        }
+        for row in failures
+    ]
+    return payload
+
+
+@app.get("/api/admin/clinics")
+async def api_admin_clinics(request: Request):
+    require_founder_admin(request)
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT c.id::text AS clinic_id,
+                   COALESCE(NULLIF(c.display_name, ''), c.name) AS display_name,
+                   c.created_at,
+                   (SELECT COUNT(*)::int FROM users u WHERE u.clinic_id = c.id) AS user_count,
+                   (SELECT COUNT(*)::int FROM patients p WHERE p.clinic_id = c.id AND p.archived_at IS NULL) AS patient_count,
+                   (SELECT COUNT(*)::int FROM waitlist_slots s WHERE s.clinic_id = c.id) AS broadcast_count,
+                   (SELECT COUNT(*)::int FROM appointments a WHERE a.clinic_id = c.id) AS appointment_count,
+                   (SELECT COUNT(*)::int FROM appointments a WHERE a.clinic_id = c.id AND a.source = 'recovered') AS recovered_appointment_count,
+                   (SELECT COALESCE(SUM(s.slot_value_pence), 0)::int FROM waitlist_slots s WHERE s.clinic_id = c.id AND (s.status = 'locked' OR s.accepted_by IS NOT NULL)) AS revenue_saved_pence,
+                   GREATEST(
+                     COALESCE((SELECT MAX(al.created_at) FROM audit_log al WHERE al.clinic_id = c.id), c.created_at),
+                     COALESCE((SELECT MAX(s.created_at) FROM waitlist_slots s WHERE s.clinic_id = c.id), c.created_at),
+                     COALESCE((SELECT MAX(a.created_at) FROM appointments a WHERE a.clinic_id = c.id), c.created_at)
+                   ) AS last_activity_at
+            FROM clinics c
+            ORDER BY c.created_at DESC
+            LIMIT 500
+            """
+        )
+    return {
+        "clinics": [
+            {
+                "clinic_id": row["clinic_id"],
+                "display_name": row["display_name"],
+                "created_at": iso_or_none(row["created_at"]),
+                "user_count": row["user_count"],
+                "patient_count": row["patient_count"],
+                "broadcast_count": row["broadcast_count"],
+                "recovered_appointment_count": row["recovered_appointment_count"],
+                "appointment_count": row["appointment_count"],
+                "revenue_saved_pence": row["revenue_saved_pence"],
+                "last_activity_at": iso_or_none(row["last_activity_at"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/admin/access-requests")
+async def api_admin_access_requests(request: Request, status: str | None = None, limit: int = 100):
+    require_founder_admin(request)
+    status_filter = None
+    if clean_optional_string(status):
+        status_filter = normalize_access_request_status(status)
+    max_limit = max(1, min(safe_int(limit, 100), 500))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, clinic_name, contact_name, contact_email, phone,
+                   practice_type, practice_size, message, status, source, notes,
+                   created_at, updated_at
+            FROM access_requests
+            WHERE ($1::text IS NULL OR status = $1)
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            status_filter,
+            max_limit,
+        )
+    return {
+        "access_requests": [
+            {
+                "id": row["id"],
+                "clinic_name": row["clinic_name"],
+                "contact_name": row["contact_name"],
+                "contact_email": row["contact_email"],
+                "phone": row["phone"],
+                "practice_type": row["practice_type"],
+                "practice_size": row["practice_size"],
+                "message": row["message"],
+                "status": row["status"],
+                "source": row["source"],
+                "notes": row["notes"],
+                "created_at": iso_or_none(row["created_at"]),
+                "updated_at": iso_or_none(row["updated_at"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.patch("/api/admin/access-requests/{request_id}")
+async def api_admin_update_access_request(request_id: str, update: AccessRequestUpdate, request: Request):
+    require_founder_admin(request)
+    try:
+        request_uuid = uuid.UUID(str(request_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid request id")
+    payload = update.model_dump(exclude_unset=True)
+    fields = [field for field in update.model_fields_set if field in {"status", "notes"}]
+    if not fields:
+        raise HTTPException(status_code=400, detail="No supported fields provided")
+    assignments = []
+    values = []
+    for index, field in enumerate(fields, start=1):
+        assignments.append(f"{field} = ${index}")
+        values.append(payload.get(field))
+    assignments.append("updated_at = now()")
+    values.append(request_uuid)
+    async with request.app.state.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""
+            UPDATE access_requests
+            SET {", ".join(assignments)}
+            WHERE id = ${len(values)}
+            RETURNING id::text, clinic_name, contact_name, contact_email, phone,
+                      practice_type, practice_size, message, status, source, notes,
+                      created_at, updated_at
+            """,
+            *values,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Access request not found")
+    return {
+        "id": row["id"],
+        "clinic_name": row["clinic_name"],
+        "contact_name": row["contact_name"],
+        "contact_email": row["contact_email"],
+        "phone": row["phone"],
+        "practice_type": row["practice_type"],
+        "practice_size": row["practice_size"],
+        "message": row["message"],
+        "status": row["status"],
+        "source": row["source"],
+        "notes": row["notes"],
+        "created_at": iso_or_none(row["created_at"]),
+        "updated_at": iso_or_none(row["updated_at"]),
+    }
+
+
+@app.get("/api/admin/activity")
+async def api_admin_activity(request: Request, limit: int = 100):
+    require_founder_admin(request)
+    max_limit = max(1, min(safe_int(limit, 100), 500))
+    async with request.app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, clinic_id::text, event_type, slot_id::text,
+                   offer_id::text, success, created_at
+            FROM audit_log
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            max_limit,
+        )
+    return {
+        "events": [
+            {
+                "id": row["id"],
+                "clinic_id": row["clinic_id"],
+                "event_type": row["event_type"],
+                "slot_id": row["slot_id"],
+                "offer_id": row["offer_id"],
+                "success": row["success"],
+                "created_at": iso_or_none(row["created_at"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/support/summary")
+async def api_support_summary(request: Request, clinic_id: str | None = None):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    target_clinic_id = get_session_clinic_id(request)
+    if clean_optional_string(clinic_id):
+        if not is_founder_admin(request):
+            raise HTTPException(status_code=404, detail="Not found")
+        try:
+            uuid.UUID(str(clinic_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid clinic_id")
+        target_clinic_id = str(clinic_id)
+    return await build_support_summary(request.app.state.pool, target_clinic_id)
+
+
+@app.post("/api/demo/seed")
+async def api_demo_seed(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not is_demo_seed_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    clinic_id = get_session_clinic_id(request)
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    now = datetime.now(timezone.utc)
+    fake_patients = [
+        ("Avery", "Demo", "demo.patient1@example.com", "Check-up", "Dr. Patel", 5),
+        ("Blake", "Demo", "demo.patient2@example.com", "Hygienist", "Dr. Smith", 4),
+        ("Casey", "Demo", "demo.patient3@example.com", "Emergency", None, 5),
+        ("Drew", "Demo", "demo.patient4@example.com", "Filling", "Dr. Patel", 3),
+        ("Emery", "Demo", "demo.patient5@example.com", "Consultation", None, 2),
+    ]
+    created_patients = 0
+    created_appointments = 0
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            patient_ids: list[uuid.UUID] = []
+            for first_name, last_name, email, appointment_type, clinician, priority in fake_patients:
+                existing = await conn.fetchrow(
+                    """
+                    SELECT id
+                    FROM patients
+                    WHERE clinic_id = $1 AND lower(email) = lower($2)
+                    """,
+                    clinic_uuid,
+                    email,
+                )
+                if existing:
+                    patient_id = existing["id"]
+                    await conn.execute(
+                        """
+                        UPDATE patients
+                        SET archived_at = NULL,
+                            lifecycle_status = 'waitlist',
+                            consent_status = 'consented',
+                            consent_source = $3,
+                            notes = $4,
+                            priority = $5,
+                            preferred_appointment_type = $6,
+                            preferred_clinician = $7,
+                            updated_at = now()
+                        WHERE id = $1 AND clinic_id = $2
+                        """,
+                        patient_id,
+                        clinic_uuid,
+                        DEMO_SEED_MARKER,
+                        DEMO_SEED_MARKER,
+                        priority,
+                        appointment_type,
+                        clinician,
+                    )
+                else:
+                    patient_id = uuid.uuid4()
+                    created_patients += 1
+                    await conn.execute(
+                        """
+                        INSERT INTO patients (
+                            id, clinic_id, first_name, last_name, email, phone,
+                            consent_status, consent_source, consented_at, notes,
+                            priority, preferred_appointment_type, preferred_clinician,
+                            lifecycle_status, created_at, updated_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, NULL, 'consented', $6, $7, $8, $9, $10, $11, 'waitlist', $7, $7)
+                        """,
+                        patient_id,
+                        clinic_uuid,
+                        first_name,
+                        last_name,
+                        email,
+                        DEMO_SEED_MARKER,
+                        now,
+                        DEMO_SEED_MARKER,
+                        priority,
+                        appointment_type,
+                        clinician,
+                    )
+                patient_ids.append(patient_id)
+
+            appointments = [
+                (patient_ids[0], "demo.patient1@example.com", "Avery Demo", "Check-up", "Dr. Patel", now + timedelta(days=1, hours=2), 9500, "booked", None),
+                (patient_ids[1], "demo.patient2@example.com", "Blake Demo", "Hygienist", "Dr. Smith", now + timedelta(days=2), 7500, "booked", None),
+                (patient_ids[2], "demo.patient3@example.com", "Casey Demo", "Emergency", "Dr. Lee", now - timedelta(days=1), 12000, "completed", now - timedelta(days=1)),
+            ]
+            for patient_id, email, name, appointment_type, clinician, appointment_time, value_pence, status, completed_at in appointments:
+                exists = await conn.fetchval(
+                    """
+                    SELECT COUNT(*)::int
+                    FROM appointments
+                    WHERE clinic_id = $1
+                      AND lower(patient_email) = lower($2)
+                      AND notes = $3
+                      AND appointment_type = $4
+                      AND status = $5
+                    """,
+                    clinic_uuid,
+                    email,
+                    DEMO_SEED_MARKER,
+                    appointment_type,
+                    status,
+                )
+                if exists:
+                    continue
+                await conn.execute(
+                    """
+                    INSERT INTO appointments (
+                        id, clinic_id, patient_id, patient_email, patient_name,
+                        source, appointment_type, clinician, appointment_time,
+                        slot_value_pence, status, notes, completed_at, created_at, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, 'manual', $6, $7, $8, $9, $10, $11, $12, now(), now())
+                    """,
+                    uuid.uuid4(),
+                    clinic_uuid,
+                    patient_id,
+                    email,
+                    name,
+                    appointment_type,
+                    clinician,
+                    appointment_time,
+                    value_pence,
+                    status,
+                    DEMO_SEED_MARKER,
+                    completed_at,
+                )
+                created_appointments += 1
+
+    await log_clinical_event(
+        request.app.state.pool,
+        "demo_data_seeded",
+        clinic_id=clinic_id,
+        client_ip=request.client.host if request.client else None,
+        details={"created_patients": created_patients, "created_appointments": created_appointments},
+    )
+    return {"ok": True, "created_patients": created_patients, "created_appointments": created_appointments}
+
+
+@app.post("/api/demo/clear")
+async def api_demo_clear(request: Request):
+    auth_redirect = require_auth(request)
+    if auth_redirect:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not is_demo_seed_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    clinic_id = get_session_clinic_id(request)
+    clinic_uuid = uuid.UUID(str(clinic_id))
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            archived_patients = await conn.fetchval(
+                """
+                WITH updated AS (
+                    UPDATE patients
+                    SET archived_at = COALESCE(archived_at, now()),
+                        lifecycle_status = 'archived',
+                        updated_at = now()
+                    WHERE clinic_id = $1
+                      AND (notes = $2 OR consent_source = $2 OR email LIKE 'demo.patient%@example.com')
+                    RETURNING 1
+                )
+                SELECT COUNT(*)::int FROM updated
+                """,
+                clinic_uuid,
+                DEMO_SEED_MARKER,
+            )
+            cancelled_appointments = await conn.fetchval(
+                """
+                WITH updated AS (
+                    UPDATE appointments
+                    SET status = 'cancelled',
+                        cancelled_at = COALESCE(cancelled_at, now()),
+                        notes = $2,
+                        updated_at = now()
+                    WHERE clinic_id = $1
+                      AND (notes = $3 OR patient_email LIKE 'demo.patient%@example.com')
+                      AND status <> 'cancelled'
+                    RETURNING 1
+                )
+                SELECT COUNT(*)::int FROM updated
+                """,
+                clinic_uuid,
+                f"{DEMO_SEED_MARKER}_cleared",
+                DEMO_SEED_MARKER,
+            )
+    await log_clinical_event(
+        request.app.state.pool,
+        "demo_data_cleared",
+        clinic_id=clinic_id,
+        client_ip=request.client.host if request.client else None,
+        details={"archived_patients": archived_patients or 0, "cancelled_appointments": cancelled_appointments or 0},
+    )
+    return {"ok": True, "archived_patients": archived_patients or 0, "cancelled_appointments": cancelled_appointments or 0}
 
 
 @app.get("/api/export/clinic-summary")
@@ -3373,8 +4110,8 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
 
                 await conn.execute(
                     """
-                    INSERT INTO users (id, clinic_id, email, hashed_password, is_owner)
-                    VALUES ($1, $2, $3, $4, TRUE)
+                    INSERT INTO users (id, clinic_id, email, hashed_password, is_owner, role)
+                    VALUES ($1, $2, $3, $4, TRUE, 'clinic_admin')
                     """,
                     user_id,
                     clinic_id,
@@ -3384,6 +4121,8 @@ async def signup(request: Request, clinic_name: str = Form(...), email: str = Fo
 
         request.session["user_id"] = str(user_id)
         request.session["clinic_id"] = str(clinic_id)
+        request.session["user_email"] = normalized_email
+        request.session["user_role"] = "clinic_admin"
 
         return RedirectResponse(url="/app/dashboard", status_code=303)
 
@@ -3402,7 +4141,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             """
-            SELECT id, clinic_id, hashed_password
+            SELECT id, clinic_id, email, hashed_password, role
             FROM users
             WHERE email = $1
             """,
@@ -3417,6 +4156,8 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
 
     request.session["user_id"] = str(user["id"])
     request.session["clinic_id"] = str(user["clinic_id"])
+    request.session["user_email"] = str(user["email"]).lower()
+    request.session["user_role"] = normalize_user_role(user["role"])
 
     return RedirectResponse(url="/app/dashboard", status_code=303)
 
@@ -3505,6 +4246,50 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        """)
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS access_requests (
+            id UUID PRIMARY KEY,
+            clinic_name TEXT,
+            contact_name TEXT NOT NULL,
+            contact_email TEXT NOT NULL,
+            phone TEXT,
+            practice_type TEXT,
+            practice_size TEXT,
+            message TEXT,
+            status TEXT NOT NULL DEFAULT 'new',
+            source TEXT NOT NULL DEFAULT 'landing',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_access_requests_status
+        ON access_requests(status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_access_requests_created_at
+        ON access_requests(created_at);
+        """)
+
+        await conn.execute("""
+        ALTER TABLE access_requests
+        ADD COLUMN IF NOT EXISTS notes TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'clinic_user';
+        """)
+
+        await conn.execute("""
+        UPDATE users
+        SET role = 'clinic_admin'
+        WHERE is_owner = TRUE
+          AND (role IS NULL OR role = 'clinic_user');
         """)
 
         await conn.execute("""
@@ -3645,6 +4430,21 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         await conn.execute("""
         ALTER TABLE clinics
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS onboarding_step TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE clinics
+        ADD COLUMN IF NOT EXISTS pilot_status TEXT NOT NULL DEFAULT 'setup';
         """)
 
         await conn.execute("""

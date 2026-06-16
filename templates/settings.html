@@ -111,6 +111,7 @@
                         <span class="email-pill test" id="emailSenderMode">Checking</span>
                     </div>
                     <div id="emailSenderHelp">Checking sender readiness...</div>
+                    <div id="emailFailureStatus">Recent email failures: loading...</div>
                     <div class="env-code">RESEND_FROM_EMAIL=SwiftSlot &lt;appointments@swiftslot.org&gt;</div>
                 </div>
             </div>
@@ -218,6 +219,7 @@
     var senderValue=byId('emailSenderValue');
     var senderMode=byId('emailSenderMode');
     var senderHelp=byId('emailSenderHelp');
+    var emailFailureStatus=byId('emailFailureStatus');
     if(senderValue) senderValue.textContent=data.email_sender || 'Not configured';
     if(senderMode){
       senderMode.textContent=data.email_sender_is_testing ? 'Test sender' : 'Domain sender';
@@ -228,6 +230,7 @@
         ? 'The resend.dev sender can usually only send to your own verified Resend account email. To email real patients, verify swiftslot.org in Resend and switch to <a href="mailto:appointments@swiftslot.org">appointments@swiftslot.org</a>.'
         : 'Sender is not using the resend.dev test domain. Keep your Resend domain verification active before live patient testing.';
     }
+    if(emailFailureStatus) emailFailureStatus.textContent='Recent email failures: '+Number(data.recent_email_failures || 0);
   }
   fetch('/api/clinic/settings')
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })

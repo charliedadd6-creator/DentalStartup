@@ -646,6 +646,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--gray-100);color:v
 .setup-row.warning .setup-dot{background:var(--amber-500)}
 .setup-row.fail .setup-dot{background:var(--red-500)}
 .setup-ready{font-size:11px;font-weight:700;color:var(--green-700);background:var(--green-100);border-radius:8px;padding:9px 10px}
+.demo-tools{display:none;border-top:1px solid var(--gray-100);padding:10px 18px 14px}
+.demo-tools.show{display:block}
+.demo-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.demo-btn{height:32px;border-radius:8px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-700);font-family:'Inter',sans-serif;font-size:11px;font-weight:800;cursor:pointer}
+.demo-btn.primary{background:var(--navy-600);border-color:var(--navy-600);color:white}
+.demo-msg{font-size:10px;color:var(--gray-400);min-height:14px;margin-top:8px}
 .activity-list{padding:6px 0;max-height:240px;overflow-y:auto}
 .activity-item{padding:8px 18px;border-bottom:1px solid var(--gray-50)}
 .activity-item:last-child{border-bottom:none}
@@ -968,13 +974,22 @@ Logout
         <div class="setup-panel">
           <div class="setup-head">
             <div>
-              <div class="setup-title">Setup Checklist</div>
+              <div class="setup-title">Pilot Setup</div>
               <div class="setup-sub" id="setupSummary">Checking production readiness...</div>
             </div>
             <button class="setup-toggle" id="setupToggle" type="button">Hide</button>
           </div>
           <div class="setup-body" id="setupBody">
             <div class="setup-row"><span class="setup-dot"></span><span>Loading setup checks...</span></div>
+          </div>
+          <div class="demo-tools" id="demoTools">
+            <div class="setup-title">Demo Data</div>
+            <div class="setup-sub">Safe fake records for local pilot testing</div>
+            <div class="demo-actions">
+              <button class="demo-btn primary" id="seedDemoBtn" type="button">Seed demo data</button>
+              <button class="demo-btn" id="clearDemoBtn" type="button">Clear demo data</button>
+            </div>
+            <div class="demo-msg" id="demoMsg"></div>
           </div>
         </div>
 
@@ -1210,15 +1225,30 @@ function renderReadiness(data){
   var summary=byId('setupSummary');
   if(!body) return;
   var checks=(data && Array.isArray(data.checks)) ? data.checks : [];
+  var byKey={};
+  checks.forEach(function(check){ byKey[check.key]=check; });
+  var steps=[
+    {label:'Step 1: Complete clinic settings', keys:['clinic_settings','reply_to_email']},
+    {label:'Step 2: Add or import waitlist patients', keys:['consented_patients']},
+    {label:'Step 3: Send first test broadcast', keys:['broadcasts']},
+    {label:'Step 4: Verify email sender/domain', keys:['resend_from_email','resend_domain']},
+    {label:'Step 5: Review analytics/recovery results', keys:['appointments']}
+  ];
+  var demoTools=byId('demoTools');
+  if(demoTools) demoTools.className='demo-tools'+(data && data.demo_seed_enabled ? ' show' : '');
   var blockers=checks.filter(function(check){ return check.status!=='pass'; });
   if(data && data.ready){
-    if(summary) summary.textContent='Ready for live clinic testing';
-    body.innerHTML='<div class="setup-ready">SwiftSlot is ready for live clinic testing.</div>';
+    if(summary) summary.textContent='Ready for live pilot testing';
+    body.innerHTML='<div class="setup-ready">Ready for live pilot testing.</div>';
     return;
   }
-  if(summary) summary.textContent=blockers.length+' setup step'+(blockers.length===1?'':'s')+' remaining';
-  body.innerHTML=(blockers.length?blockers:checks).map(function(check){
-    return '<div class="setup-row '+esc(check.status)+'"><span class="setup-dot"></span><span><strong>'+esc(check.label)+'</strong><br>'+esc(check.message)+'</span></div>';
+  if(summary) summary.textContent=blockers.length+' setup check'+(blockers.length===1?'':'s')+' remaining';
+  body.innerHTML=steps.map(function(step){
+    var related=step.keys.map(function(key){return byKey[key];}).filter(Boolean);
+    var status=related.some(function(check){return check.status==='fail';}) ? 'fail' : related.some(function(check){return check.status==='warning';}) ? 'warning' : 'pass';
+    var next=related.filter(function(check){return check.status!=='pass';})[0];
+    var message=next ? (next.suggested_next_action || next.message) : 'Done';
+    return '<div class="setup-row '+esc(status)+'"><span class="setup-dot"></span><span><strong>'+esc(step.label)+'</strong><br>'+esc(message)+'</span></div>';
   }).join('') || '<div class="setup-row"><span class="setup-dot"></span><span>No readiness checks returned.</span></div>';
 }
 
@@ -2125,6 +2155,22 @@ document.getElementById('setupToggle').addEventListener('click',function(){
   body.classList.toggle('collapsed');
   this.textContent=body.classList.contains('collapsed')?'Show':'Hide';
 });
+
+function setDemoMsg(text){var el=byId('demoMsg'); if(el) el.textContent=text || '';}
+function runDemoAction(path, confirmText){
+  if(confirmText && !window.confirm(confirmText)) return;
+  setDemoMsg('Working...');
+  fetch(API+path,{method:'POST'})
+    .then(function(r){return r.json().then(function(d){return {ok:r.ok,data:d};});})
+    .then(function(res){
+      if(!res.ok) throw new Error(res.data.detail || 'Demo action failed');
+      setDemoMsg('Done.');
+      return Promise.all([loadWaitlistPatients(), loadDashboardMetrics(), loadReadiness(), loadActivityTimeline()]);
+    })
+    .catch(function(err){setDemoMsg(err.message || 'Could not update demo data.');});
+}
+document.getElementById('seedDemoBtn').addEventListener('click',function(){runDemoAction('/api/demo/seed');});
+document.getElementById('clearDemoBtn').addEventListener('click',function(){runDemoAction('/api/demo/clear','Clear only demo_seed records for this clinic?');});
 
 /* ─── HEALTH CHECK ───────────────────────── */
 function healthCheck(){

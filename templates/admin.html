@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwiftSlot - Founder Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui,sans-serif;background:#f1f5f9;color:#1e293b;display:flex;min-height:100vh}
+.sidebar{width:220px;background:#0d1b3e;color:white;min-height:100vh;padding-top:20px;flex-shrink:0}
+.sidebar-brand{padding:0 20px 20px;font-size:15px;font-weight:800;border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:10px}
+.sidebar-brand span{font-size:10px;display:block;color:rgba(255,255,255,.4);font-weight:400;margin-top:2px}
+.nav-label{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.25);padding:0 20px;margin:14px 0 6px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 18px;margin:1px 8px;border-radius:8px;font-size:12px;font-weight:600;color:rgba(255,255,255,.58);text-decoration:none;width:calc(100% - 16px)}
+.nav-item:hover,.nav-item.active{background:rgba(37,99,235,.25);color:white}
+.main{flex:1;min-width:0}
+.topbar{height:56px;background:white;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 24px}
+.topbar-title{font-size:15px;font-weight:800;color:#0f172a}.topbar-sub{font-size:12px;color:#94a3b8;margin-top:1px}
+.content{padding:24px;display:grid;gap:16px}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.metric{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.metric-label{font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#64748b;margin-bottom:8px}
+.metric-value{font-size:24px;font-weight:900;color:#0f172a;letter-spacing:-.5px}
+.grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;align-items:start}
+.panel{background:white;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.panel-head{padding:14px 18px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.panel-title{font-size:13px;font-weight:800;color:#0f172a}.panel-sub{font-size:11px;color:#94a3b8;margin-top:1px}
+.panel-body{padding:14px 18px}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#94a3b8;background:#f8fafc;text-align:left;padding:9px 10px;border-bottom:1px solid #e2e8f0}
+td{font-size:12px;color:#334155;padding:10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:800;background:#e2e8f0;color:#475569}
+.pill.new{background:#dbeafe;color:#1d4ed8}.pill.contacted{background:#fef3c7;color:#92400e}.pill.qualified{background:#dcfce7;color:#15803d}.pill.rejected{background:#fee2e2;color:#b91c1c}.pill.converted{background:#ede9fe;color:#6d28d9}
+.muted{color:#94a3b8}.empty{padding:20px;text-align:center;font-size:12px;color:#94a3b8}
+.toolbar{display:flex;align-items:center;gap:10px}
+select,button{height:32px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;color:#334155;font:12px Inter,system-ui,sans-serif;padding:0 10px}
+button{cursor:pointer;font-weight:800;background:#1e3a8a;color:white;border-color:#1e3a8a}
+.msg{font-size:12px;color:#64748b}
+@media(max-width:1100px){.metrics{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.sidebar{display:none}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-brand">SwiftSlot <span>Founder Admin</span></div>
+  <div class="nav-label">Main</div>
+  <a class="nav-item" href="/app/dashboard">Dashboard</a>
+  <a class="nav-item" href="/app/waitlist">Waitlist</a>
+  <a class="nav-item" href="/app/broadcasts">Broadcasts</a>
+  <a class="nav-item" href="/app/appointments">Appointments</a>
+  <a class="nav-item" href="/app/analytics">Analytics</a>
+  <div class="nav-label">Founder</div>
+  <a class="nav-item active" href="/admin">Admin</a>
+  <a class="nav-item" href="/app/settings">Settings</a>
+</aside>
+<main class="main">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">Founder Admin</div>
+      <div class="topbar-sub">Pilot launch overview, leads, usage, and delivery failures</div>
+    </div>
+    <div class="msg" id="statusMsg">Loading...</div>
+  </div>
+  <div class="content">
+    <section>
+      <div class="metrics" id="overviewGrid"></div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head">
+          <div><div class="panel-title">Clinics</div><div class="panel-sub">Safe usage summaries by clinic</div></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Clinic</th><th>Users</th><th>Patients</th><th>Broadcasts</th><th>Appointments</th><th>Recovered</th><th>Saved</th><th>Last activity</th></tr></thead><tbody id="clinicsBody"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div><div class="panel-title">Access Requests</div><div class="panel-sub">Landing page lead capture</div></div>
+          <div class="toolbar">
+            <select id="statusFilter">
+              <option value="">All</option><option>new</option><option>contacted</option><option>qualified</option><option>rejected</option><option>converted</option>
+            </select>
+            <button id="refreshLeads" type="button">Refresh</button>
+          </div>
+        </div>
+        <div id="accessRequestsBody"></div>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head"><div><div class="panel-title">Recent Activity</div><div class="panel-sub">Latest audit events across clinics</div></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Clinic</th><th>Event</th><th>Status</th></tr></thead><tbody id="activityBody"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><div class="panel-title">Email Failures</div><div class="panel-sub">Latest failed delivery events</div></div></div>
+        <div id="emailFailuresBody"></div>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+(function(){
+  function byId(id){return document.getElementById(id);}
+  function esc(s){return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function fmtDate(iso){return iso ? new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '-';}
+  function money(pence){return '£'+((Number(pence||0)/100).toFixed(0));}
+  function setStatus(text){byId('statusMsg').textContent=text;}
+  function api(path){return fetch(path).then(function(r){if(r.status===401){window.location.href='/login-page';throw new Error('Please log in again.');} if(!r.ok) throw new Error('HTTP '+r.status); return r.json();});}
+  function renderOverview(data){
+    var items=[
+      ['Clinics',data.total_clinics],['Users',data.total_users],['Patients',data.total_patients],['Broadcasts',data.total_broadcasts],['Offers',data.total_offers],
+      ['Appointments',data.total_appointments],['Recovered',data.total_recovered_appointments],['Revenue saved',money(data.total_revenue_saved_pence)],['New leads',data.new_access_requests_count],['Email failures',data.email_failures_count]
+    ];
+    byId('overviewGrid').innerHTML=items.map(function(item){return '<div class="metric"><div class="metric-label">'+esc(item[0])+'</div><div class="metric-value">'+esc(item[1] == null ? 0 : item[1])+'</div></div>';}).join('');
+    var failures=data.latest_failed_email_events || [];
+    byId('emailFailuresBody').innerHTML=failures.length ? '<div class="table-wrap"><table><thead><tr><th>Time</th><th>Clinic</th><th>Reason</th></tr></thead><tbody>'+failures.map(function(event){
+      var details=event.details && typeof event.details==='object' ? event.details.reason : '';
+      return '<tr><td>'+esc(fmtDate(event.created_at))+'</td><td>'+esc(event.clinic_id || '-').slice(0,8)+'</td><td>'+esc(details || 'Email send failed')+'</td></tr>';
+    }).join('')+'</tbody></table></div>' : '<div class="empty">No failed email events.</div>';
+  }
+  function renderClinics(data){
+    var rows=data.clinics || [];
+    byId('clinicsBody').innerHTML=rows.length ? rows.map(function(row){
+      return '<tr><td><strong>'+esc(row.display_name || 'Clinic')+'</strong><br><span class="muted">'+esc(row.clinic_id).slice(0,8)+'</span></td><td>'+esc(row.user_count)+'</td><td>'+esc(row.patient_count)+'</td><td>'+esc(row.broadcast_count)+'</td><td>'+esc(row.appointment_count)+'</td><td>'+esc(row.recovered_appointment_count)+'</td><td>'+esc(money(row.revenue_saved_pence))+'</td><td>'+esc(fmtDate(row.last_activity_at))+'</td></tr>';
+    }).join('') : '<tr><td colspan="8" class="empty">No clinics yet.</td></tr>';
+  }
+  function renderAccessRequests(data){
+    var rows=data.access_requests || [];
+    if(!rows.length){byId('accessRequestsBody').innerHTML='<div class="empty">No access requests.</div>';return;}
+    byId('accessRequestsBody').innerHTML='<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Practice</th><th>Status</th><th>Created</th></tr></thead><tbody>'+rows.map(function(row){
+      return '<tr><td><strong>'+esc(row.contact_name)+'</strong><br><span class="muted">'+esc(row.contact_email)+'</span></td><td>'+esc(row.clinic_name || row.practice_type || '-')+'<br><span class="muted">'+esc(row.practice_size || '')+'</span></td><td><span class="pill '+esc(row.status)+'">'+esc(row.status)+'</span></td><td>'+esc(fmtDate(row.created_at))+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+  }
+  function renderActivity(data){
+    var rows=data.events || [];
+    byId('activityBody').innerHTML=rows.length ? rows.map(function(row){
+      return '<tr><td>'+esc(fmtDate(row.created_at))+'</td><td>'+esc(row.clinic_id || '-').slice(0,8)+'</td><td>'+esc(row.event_type)+'</td><td>'+esc(row.success === false ? 'failed' : 'ok')+'</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">No activity yet.</td></tr>';
+  }
+  function loadLeads(){var status=byId('statusFilter').value;return api('/api/admin/access-requests?limit=100'+(status?'&status='+encodeURIComponent(status):'')).then(renderAccessRequests);}
+  function loadAll(){
+    setStatus('Loading...');
+    Promise.all([
+      api('/api/admin/overview').then(renderOverview),
+      api('/api/admin/clinics').then(renderClinics),
+      loadLeads(),
+      api('/api/admin/activity?limit=50').then(renderActivity)
+    ]).then(function(){setStatus('Updated '+new Date().toLocaleTimeString('en-GB'));}).catch(function(err){setStatus(err.message || 'Could not load admin data');});
+  }
+  byId('refreshLeads').addEventListener('click',loadLeads);
+  byId('statusFilter').addEventListener('change',loadLeads);
+  loadAll();
+})();
+</script>
+</body>
+</html>

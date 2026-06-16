@@ -2,185 +2,181 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SwiftSlot — Operational Control for Dental Cancellations</title>
+<title>SwiftSlot - Operational Control for Dental Cancellations</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{
-    font-family:Inter,sans-serif;
-    background:#f6f8fb;
-    color:#0f172a;
-}
-.navbar{
-    background:#0d1b3e;
-    padding:20px 60px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-}
-.logo{
-    color:white;
-    font-weight:800;
-    font-size:16px;
-}
-.nav-actions a{
-    text-decoration:none;
-    margin-left:24px;
-    font-size:13px;
-    font-weight:600;
-}
+body{font-family:Inter,system-ui,sans-serif;background:#f6f8fb;color:#0f172a;-webkit-font-smoothing:antialiased}
+.navbar{background:#0d1b3e;padding:20px 60px;display:flex;justify-content:space-between;align-items:center}
+.logo{color:white;font-weight:800;font-size:16px}
+.nav-actions{display:flex;align-items:center;gap:20px}
+.nav-actions a{text-decoration:none;font-size:13px;font-weight:700}
 .login-link{color:white}
-.cta{
-    background:#2563eb;
-    padding:8px 18px;
-    border-radius:8px;
-    color:white;
-}
-.hero{
-    padding:140px 60px 120px 60px;
-    max-width:900px;
-}
-.hero h1{
-    font-size:52px;
-    font-weight:800;
-    line-height:1.1;
-    margin-bottom:22px;
-}
-.hero p{
-    font-size:18px;
-    color:#475569;
-    max-width:620px;
-    margin-bottom:36px;
-}
-.hero-buttons{
-    display:flex;
-    gap:18px;
-}
-.btn-primary{
-    background:#1e3a8a;
-    padding:16px 34px;
-    border-radius:10px;
-    color:white;
-    text-decoration:none;
-    font-weight:700;
-    font-size:15px;
-}
-.btn-secondary{
-    color:#1e3a8a;
-    font-weight:600;
-    text-decoration:none;
-    font-size:14px;
-}
-.section{
-    padding:100px 60px;
-    max-width:1000px;
-}
-.section h2{
-    font-size:28px;
-    font-weight:800;
-    margin-bottom:18px;
-}
-.section p{
-    font-size:17px;
-    color:#475569;
-    max-width:700px;
-}
-.process{
-    margin-top:50px;
-    display:grid;
-    grid-template-columns:1fr;
-    gap:24px;
-}
-.step{
-    background:white;
-    padding:32px;
-    border-radius:14px;
-    box-shadow:0 8px 24px rgba(0,0,0,0.04);
-}
-.step strong{
-    display:block;
-    margin-bottom:8px;
-    font-size:16px;
-}
-.closing{
-    padding:120px 60px;
-    border-top:1px solid #e2e8f0;
-}
-.closing h2{
-    font-size:32px;
-    font-weight:800;
-    margin-bottom:18px;
-}
-.footer{
-    padding:60px;
-    font-size:12px;
-    color:#94a3b8;
-}
+.cta{background:#2563eb;padding:8px 18px;border-radius:8px;color:white}
+.hero{padding:120px 60px 80px;max-width:960px}
+.hero h1{font-size:52px;font-weight:800;line-height:1.1;margin-bottom:22px;letter-spacing:-0.8px}
+.hero p{font-size:18px;color:#475569;max-width:660px;margin-bottom:34px;line-height:1.6}
+.hero-buttons{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.btn-primary{background:#1e3a8a;padding:15px 30px;border-radius:10px;color:white;text-decoration:none;font-weight:800;font-size:15px;border:none;cursor:pointer;font-family:Inter,system-ui,sans-serif}
+.btn-secondary{color:#1e3a8a;font-weight:700;text-decoration:none;font-size:14px}
+.section{padding:80px 60px;max-width:1040px}
+.section h2,.request h2{font-size:28px;font-weight:800;margin-bottom:14px;letter-spacing:-0.3px}
+.section p,.request p{font-size:16px;color:#475569;max-width:720px;line-height:1.65}
+.process{margin-top:38px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.step{background:white;padding:26px;border-radius:12px;border:1px solid #e2e8f0;box-shadow:0 8px 24px rgba(15,23,42,0.04)}
+.step strong{display:block;margin-bottom:8px;font-size:15px}
+.step span{font-size:13px;color:#64748b;line-height:1.55}
+.request{padding:80px 60px;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;background:#ffffff}
+.request-inner{max-width:1040px;display:grid;grid-template-columns:0.9fr 1.1fr;gap:46px;align-items:start}
+.request-form{border:1px solid #e2e8f0;border-radius:12px;padding:22px;background:#f8fafc;display:grid;gap:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+.field input,.field select,.field textarea{width:100%;border:1px solid #e2e8f0;border-radius:8px;background:white;color:#0f172a;font:13px Inter,system-ui,sans-serif;outline:none}
+.field input,.field select{height:38px;padding:0 11px}
+.field textarea{min-height:96px;padding:10px 11px;resize:vertical;line-height:1.5}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.full{grid-column:1/-1}
+.form-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.msg{font-size:12px;font-weight:700;min-height:16px}
+.msg.ok{color:#15803d}.msg.err{color:#b91c1c}
+.closing{padding:80px 60px}
+.closing h2{font-size:32px;font-weight:800;margin-bottom:16px;letter-spacing:-0.4px}
+.closing p{font-size:16px;color:#475569;line-height:1.6}
+.footer{padding:44px 60px;font-size:12px;color:#94a3b8}
 @media(max-width:900px){
-    .hero{padding:100px 30px}
-    .section{padding:80px 30px}
-    .closing{padding:80px 30px}
+  .navbar{padding:18px 24px}.hero,.section,.request,.closing,.footer{padding-left:24px;padding-right:24px}
+  .hero{padding-top:84px}.hero h1{font-size:38px}.process,.request-inner,.grid{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
 
 <div class="navbar">
-    <div class="logo">SwiftSlot</div>
-    <div class="nav-actions">
-        <a href="/login-page" class="login-link">Login</a>
-        <a href="/signup-page" class="cta">Request access</a>
-    </div>
+  <div class="logo">SwiftSlot</div>
+  <div class="nav-actions">
+    <a href="/login-page" class="login-link">Login</a>
+    <a href="#request-access" class="cta">Request access</a>
+  </div>
 </div>
 
 <section class="hero">
-    <h1>Operational control over last‑minute dental cancellations.</h1>
-    <p>
-        SwiftSlot gives dental practices a structured way to recover
-        cancelled appointments without manual calling or spreadsheet tracking.
-    </p>
-    <div class="hero-buttons">
-        <a href="/signup-page" class="btn-primary">Book a demo</a>
-        <a href="/login-page" class="btn-secondary">Sign in</a>
-    </div>
+  <h1>Operational control over last-minute dental cancellations.</h1>
+  <p>SwiftSlot gives dental practices a structured way to recover cancelled appointments without manual calling or spreadsheet tracking.</p>
+  <div class="hero-buttons">
+    <a href="#request-access" class="btn-primary">Request access</a>
+    <a href="/login-page" class="btn-secondary">Sign in</a>
+  </div>
 </section>
 
 <section class="section">
-    <h2>How it works inside a practice</h2>
-    <p>
-        When a patient cancels, SwiftSlot broadcasts the open slot
-        to your consented short‑notice list. The first confirmed response
-        locks the appointment automatically.
-    </p>
+  <h2>How it works inside a practice</h2>
+  <p>When a patient cancels, SwiftSlot broadcasts the open slot to your consented short-notice list. The first confirmed response locks the appointment automatically.</p>
+  <div class="process">
+    <div class="step"><strong>1. Cancellation occurs</strong><span>Reception marks the slot as available and adds appointment details.</span></div>
+    <div class="step"><strong>2. Immediate broadcast</strong><span>SwiftSlot notifies consented waitlist patients with a time-limited offer.</span></div>
+    <div class="step"><strong>3. Slot secured</strong><span>The first confirmed patient locks the appointment and the activity is tracked.</span></div>
+  </div>
+</section>
 
-    <div class="process">
-        <div class="step">
-            <strong>1 — Cancellation occurs</strong>
-            Reception marks the slot as available.
-        </div>
-        <div class="step">
-            <strong>2 — Immediate broadcast</strong>
-            SwiftSlot notifies your waitlist instantly.
-        </div>
-        <div class="step">
-            <strong>3 — Slot secured</strong>
-            The first confirmed patient locks the appointment.
-        </div>
+<section class="request" id="request-access">
+  <div class="request-inner">
+    <div>
+      <h2>Request access</h2>
+      <p>SwiftSlot is preparing early clinic pilots. Share a few details and we will follow up with a practical onboarding conversation.</p>
     </div>
+    <form class="request-form" id="accessForm">
+      <div class="grid">
+        <div class="field">
+          <label for="clinicName">Clinic / practice name</label>
+          <input id="clinicName" name="clinic_name" type="text" autocomplete="organization">
+        </div>
+        <div class="field">
+          <label for="contactName">Your name</label>
+          <input id="contactName" name="contact_name" type="text" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label for="contactEmail">Email</label>
+          <input id="contactEmail" name="contact_email" type="email" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="phone">Phone optional</label>
+          <input id="phone" name="phone" type="tel" autocomplete="tel">
+        </div>
+        <div class="field">
+          <label for="practiceType">Practice type</label>
+          <select id="practiceType" name="practice_type">
+            <option value="">Select type</option>
+            <option>Dental practice</option>
+            <option>Private clinic</option>
+            <option>Medical clinic</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="practiceSize">Practice size</label>
+          <select id="practiceSize" name="practice_size">
+            <option value="">Select size</option>
+            <option>1 clinician</option>
+            <option>2-5 clinicians</option>
+            <option>6-10 clinicians</option>
+            <option>10+ clinicians</option>
+          </select>
+        </div>
+        <div class="field full">
+          <label for="message">Message optional</label>
+          <textarea id="message" name="message" maxlength="2000"></textarea>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-primary" id="accessSubmit" type="submit">Submit request</button>
+        <span class="msg" id="accessMsg"></span>
+      </div>
+    </form>
+  </div>
 </section>
 
 <section class="closing">
-    <h2>Empty chairs are operational leakage.</h2>
-    <p>
-        SwiftSlot provides a disciplined, automated way to reduce it.
-    </p>
-    <br>
-    <a href="/signup-page" class="btn-primary">Book a demo</a>
+  <h2>Empty chairs are operational leakage.</h2>
+  <p>SwiftSlot provides a disciplined, automated way to reduce it.</p>
 </section>
 
-<div class="footer">
-    © 2026 SwiftSlot — Dental Operational Recovery System
-</div>
+<div class="footer">© 2026 SwiftSlot - Dental Operational Recovery System</div>
 
+<script>
+(function(){
+  function byId(id){return document.getElementById(id);}
+  function val(id){var el=byId(id); return el ? el.value.trim() : '';}
+  function setMsg(text, cls){var el=byId('accessMsg'); el.textContent=text||''; el.className='msg '+(cls||'');}
+  byId('accessForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var btn=byId('accessSubmit');
+    btn.disabled=true;
+    btn.textContent='Submitting...';
+    setMsg('', '');
+    fetch('/api/access-request', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        clinic_name: val('clinicName') || null,
+        contact_name: val('contactName'),
+        contact_email: val('contactEmail'),
+        phone: val('phone') || null,
+        practice_type: val('practiceType') || null,
+        practice_size: val('practiceSize') || null,
+        message: val('message') || null
+      })
+    })
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok,data:d};});})
+      .then(function(res){
+        if(!res.ok) throw new Error(res.data.detail || 'Could not submit request.');
+        byId('accessForm').reset();
+        setMsg(res.data.message || 'Thanks - we will be in touch.', 'ok');
+      })
+      .catch(function(err){setMsg(err.message || 'Could not submit request.', 'err');})
+      .finally(function(){btn.disabled=false; btn.textContent='Submit request';});
+  });
+})();
+</script>
 </body>
 </html>
