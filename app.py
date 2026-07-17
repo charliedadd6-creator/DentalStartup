@@ -1896,19 +1896,82 @@ async def api_no_show_appointment(appointment_id: str, request: Request):
     return await _appointment_status_endpoint(request, appointment_id, "no_show", "appointment_no_show")
 
 
-def validate_import_rows(rows: list[dict]) -> tuple[list[tuple[int, AppointmentCreate]], list[dict]]:
+def validate_import_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     valid = []
     invalid = []
+    email_regex = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
     for index, row in enumerate(rows):
-        try:
-            appointment = AppointmentCreate(**row)
-            normalize_appointment_type(appointment.appointment_type)
-            normalize_appointment_source(appointment.source)
-            if appointment.slot_value_pence < 0:
-                raise ValueError("slot_value_pence cannot be negative")
-            valid.append((index, appointment))
-        except (ValidationError, ValueError) as exc:
-            invalid.append({"index": index, "reason": str(exc), "row": row})
+        reasons = []
+
+        # Check required fields exist and are not empty / whitespace
+        required_fields = ["patient_name", "patient_email", "appointment_time", "appointment_type", "clinician", "slot_value_pence"]
+        for field in required_fields:
+            val = row.get(field)
+            if val is None or str(val).strip() == "":
+                reasons.append(f"Missing required field: {field}")
+
+        # Email validation
+        email_val = row.get("patient_email")
+        if email_val is not None and str(email_val).strip() != "":
+            email_str = str(email_val).strip()
+            if not email_regex.match(email_str):
+                reasons.append("Invalid email format")
+
+        # Time validation / parsing
+        time_val = row.get("appointment_time")
+        parsed_time = None
+        if time_val is not None and str(time_val).strip() != "":
+            time_str = str(time_val).strip()
+            try:
+                if time_str.endswith("Z"):
+                    time_str = time_str[:-1] + "+00:00"
+                dt = datetime.fromisoformat(time_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                parsed_time = dt.isoformat()
+            except Exception:
+                reasons.append("Invalid appointment_time format")
+
+        # Slot value pence validation
+        slot_val = row.get("slot_value_pence")
+        parsed_pence = None
+        if slot_val is not None and str(slot_val).strip() != "":
+            try:
+                parsed_pence = int(slot_val)
+                if parsed_pence < 0:
+                    reasons.append("slot_value_pence cannot be negative")
+            except ValueError:
+                try:
+                    parsed_pence = parse_money_to_pence(slot_val)
+                except Exception:
+                    reasons.append("slot_value_pence must be a valid integer or monetary string")
+
+        # Type validation
+        type_val = row.get("appointment_type")
+        if type_val is not None and str(type_val).strip() != "":
+            try:
+                normalize_appointment_type(type_val)
+            except ValueError as exc:
+                reasons.append(str(exc))
+
+        if reasons:
+            invalid.append({
+                "index": index,
+                "reason": "; ".join(reasons),
+                "row": row
+            })
+        else:
+            valid.append({
+                "patient_name": str(row.get("patient_name")).strip(),
+                "patient_email": str(row.get("patient_email")).strip().lower(),
+                "appointment_time": parsed_time,
+                "appointment_type": normalize_appointment_type(row.get("appointment_type")),
+                "clinician": str(row.get("clinician")).strip(),
+                "slot_value_pence": parsed_pence,
+                "notes": str(row.get("notes", "") or "").strip() or None
+            })
+
     return valid, invalid
 
 
@@ -2001,7 +2064,7 @@ async def api_appointment_import_preview(payload: AppointmentImportRows, request
         details={"valid_rows": len(valid), "invalid_rows": len(invalid), "total_rows": len(payload.rows)},
     )
     return {
-        "valid_rows": [row.model_dump(mode="json") for _, row in valid],
+        "valid_rows": valid,
         "invalid_rows": invalid,
         "summary": {"valid": len(valid), "invalid": len(invalid), "total": len(payload.rows)},
     }
@@ -2019,20 +2082,21 @@ async def api_appointment_import_commit(payload: AppointmentImportRows, request:
     updated_patients = 0
     errors = list(invalid)
     async with request.app.state.pool.acquire() as conn:
-        for index, row in valid:
+        for row in valid:
             try:
+                appointment_obj = AppointmentCreate(**row)
                 async with conn.transaction():
                     created_row, created_patient, updated_patient = await create_appointment_record(
                         conn,
                         clinic_uuid,
-                        row,
+                        appointment_obj,
                         source_override="import",
                     )
                     created_appointments += 1
                     created_patients += 1 if created_patient else 0
                     updated_patients += 1 if updated_patient and not created_patient else 0
             except Exception as exc:
-                errors.append({"index": index, "reason": str(exc), "row": row.model_dump(mode="json")})
+                errors.append({"index": -1, "reason": str(exc), "row": row})
     await log_clinical_event(
         request.app.state.pool,
         "appointment_imported",
