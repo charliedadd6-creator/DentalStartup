@@ -205,12 +205,17 @@ SELECT
     s.clinician AS clinician,
     s.appointment_type AS appointment_type,
     s.slot_value_pence AS slot_value_pence,
-    COUNT(o.id)::INT AS offers_sent,
-    COUNT(o.id) FILTER (WHERE o.email_send_status = 'sent')::INT AS sent_email_count,
-    COUNT(o.id) FILTER (WHERE o.email_send_status = 'failed')::INT AS failed_email_count,
     s.status AS status,
     s.accepted_by AS accepted_by,
-    s.created_at AS created_at
+    s.created_at AS created_at,
+    s.locked_at AS locked_at,
+    COUNT(o.id)::INT AS offers_sent,
+    COUNT(o.id) FILTER (WHERE o.status = 'accepted')::INT AS accepted_offers,
+    COUNT(o.id) FILTER (WHERE o.status = 'declined')::INT AS declined_offers,
+    COUNT(o.id) FILTER (WHERE o.status = 'expired')::INT AS expired_offers,
+    COUNT(o.id) FILTER (WHERE o.status = 'sent')::INT AS pending_offers,
+    COUNT(o.id) FILTER (WHERE o.email_send_status = 'sent')::INT AS sent_email_count,
+    COUNT(o.id) FILTER (WHERE o.email_send_status = 'failed')::INT AS failed_email_count
 FROM waitlist_slots s
 LEFT JOIN waitlist_offers o ON o.slot_id = s.id AND o.clinic_id = s.clinic_id
 GROUP BY
@@ -222,7 +227,8 @@ GROUP BY
     s.slot_value_pence,
     s.status,
     s.accepted_by,
-    s.created_at;
+    s.created_at,
+    s.locked_at;
 
 -- B. "email_failures" View
 -- Exposes all waitlist offers where the email dispatch failed, including reasons and failure timestamps.

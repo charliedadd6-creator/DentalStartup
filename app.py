@@ -1645,29 +1645,25 @@ async def api_broadcasts(request: Request):
         rows = await conn.fetch(
             """
             SELECT
-                s.id::text AS id,
-                s.slot_time,
-                s.clinician,
-                s.appointment_type,
-                s.slot_value_pence,
-                s.status,
-                s.accepted_by,
-                s.created_at,
-                s.locked_at,
-                COUNT(o.id)::int AS offers_sent,
-                (COUNT(o.id) FILTER (WHERE o.status = 'accepted'))::int AS accepted_offers,
-                (COUNT(o.id) FILTER (WHERE o.status = 'declined'))::int AS declined_offers,
-                (COUNT(o.id) FILTER (WHERE o.status = 'expired'))::int AS expired_offers,
-                (COUNT(o.id) FILTER (WHERE o.status = 'sent'))::int AS pending_offers,
-                (COUNT(o.id) FILTER (WHERE o.email_send_status = 'sent'))::int AS sent_email_count,
-                (COUNT(o.id) FILTER (WHERE o.email_send_status = 'failed'))::int AS failed_email_count
-            FROM waitlist_slots s
-            LEFT JOIN waitlist_offers o
-            ON o.slot_id = s.id
-            AND o.clinic_id = s.clinic_id
-            WHERE s.clinic_id = $1
-            GROUP BY s.id
-            ORDER BY s.created_at DESC
+                id::text AS id,
+                slot_time,
+                clinician,
+                appointment_type,
+                slot_value_pence,
+                status,
+                accepted_by,
+                created_at,
+                locked_at,
+                offers_sent,
+                accepted_offers,
+                declined_offers,
+                expired_offers,
+                pending_offers,
+                sent_email_count,
+                failed_email_count
+            FROM broadcasts
+            WHERE clinic_id = $1
+            ORDER BY created_at DESC
             LIMIT 100;
             """,
             clinic_uuid,
