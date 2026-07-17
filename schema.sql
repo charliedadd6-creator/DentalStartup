@@ -213,7 +213,16 @@ SELECT
     s.created_at AS created_at
 FROM waitlist_slots s
 LEFT JOIN waitlist_offers o ON o.slot_id = s.id AND o.clinic_id = s.clinic_id
-GROUP BY s.id;
+GROUP BY
+    s.id,
+    s.clinic_id,
+    s.slot_time,
+    s.clinician,
+    s.appointment_type,
+    s.slot_value_pence,
+    s.status,
+    s.accepted_by,
+    s.created_at;
 
 -- B. "email_failures" View
 -- Exposes all waitlist offers where the email dispatch failed, including reasons and failure timestamps.
