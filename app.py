@@ -20,7 +20,7 @@ from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from models_auth import UserCreate, UserLogin, generate_uuid
-from pydantic import BaseModel, EmailStr, Field, ValidationError, field_validator
+from pydantic import BaseModel, EmailStr, Field, ValidationError, field_validator, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from security import hash_password, verify_password
 from starlette.middleware.sessions import SessionMiddleware
@@ -1896,10 +1896,10 @@ async def api_no_show_appointment(appointment_id: str, request: Request):
     return await _appointment_status_endpoint(request, appointment_id, "no_show", "appointment_no_show")
 
 
-def validate_import_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+def validate_import_rows(rows: list[dict]) -> tuple[list[tuple[int, dict]], list[dict]]:
     valid = []
     invalid = []
-    email_regex = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    email_adapter = TypeAdapter(EmailStr)
 
     for index, row in enumerate(rows):
         reasons = []
@@ -1911,11 +1911,13 @@ def validate_import_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             if val is None or str(val).strip() == "":
                 reasons.append(f"Missing required field: {field}")
 
-        # Email validation
+        # Email validation with native Pydantic EmailStr adaptation
         email_val = row.get("patient_email")
         if email_val is not None and str(email_val).strip() != "":
             email_str = str(email_val).strip()
-            if not email_regex.match(email_str):
+            try:
+                email_adapter.validate_python(email_str)
+            except Exception:
                 reasons.append("Invalid email format")
 
         # Time validation / parsing
@@ -1947,11 +1949,12 @@ def validate_import_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
                 except Exception:
                     reasons.append("slot_value_pence must be a valid integer or monetary string")
 
-        # Type validation
+        # Type validation - normalize and reuse to avoid duplicate execution
         type_val = row.get("appointment_type")
+        normalized_type = None
         if type_val is not None and str(type_val).strip() != "":
             try:
-                normalize_appointment_type(type_val)
+                normalized_type = normalize_appointment_type(type_val)
             except ValueError as exc:
                 reasons.append(str(exc))
 
@@ -1962,15 +1965,15 @@ def validate_import_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
                 "row": row
             })
         else:
-            valid.append({
+            valid.append((index, {
                 "patient_name": str(row.get("patient_name")).strip(),
                 "patient_email": str(row.get("patient_email")).strip().lower(),
                 "appointment_time": parsed_time,
-                "appointment_type": normalize_appointment_type(row.get("appointment_type")),
+                "appointment_type": normalized_type,
                 "clinician": str(row.get("clinician")).strip(),
                 "slot_value_pence": parsed_pence,
                 "notes": str(row.get("notes", "") or "").strip() or None
-            })
+            }))
 
     return valid, invalid
 
@@ -2064,7 +2067,7 @@ async def api_appointment_import_preview(payload: AppointmentImportRows, request
         details={"valid_rows": len(valid), "invalid_rows": len(invalid), "total_rows": len(payload.rows)},
     )
     return {
-        "valid_rows": valid,
+        "valid_rows": [row for _, row in valid],
         "invalid_rows": invalid,
         "summary": {"valid": len(valid), "invalid": len(invalid), "total": len(payload.rows)},
     }
@@ -2082,7 +2085,7 @@ async def api_appointment_import_commit(payload: AppointmentImportRows, request:
     updated_patients = 0
     errors = list(invalid)
     async with request.app.state.pool.acquire() as conn:
-        for row in valid:
+        for index, row in valid:
             try:
                 appointment_obj = AppointmentCreate(**row)
                 async with conn.transaction():
@@ -2096,7 +2099,7 @@ async def api_appointment_import_commit(payload: AppointmentImportRows, request:
                     created_patients += 1 if created_patient else 0
                     updated_patients += 1 if updated_patient and not created_patient else 0
             except Exception as exc:
-                errors.append({"index": -1, "reason": str(exc), "row": row})
+                errors.append({"index": index, "reason": str(exc), "row": row})
     await log_clinical_event(
         request.app.state.pool,
         "appointment_imported",
