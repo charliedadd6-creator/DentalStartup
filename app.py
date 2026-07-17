@@ -2159,14 +2159,14 @@ async def api_analytics_summary(request: Request):
 
     clinic_uuid = uuid.UUID(str(get_session_clinic_id(request)))
     async with request.app.state.pool.acquire() as conn:
+        # Run efficient database aggregations
         slot_summary = await conn.fetchrow(
             """
             SELECT
                 COUNT(*)::int AS total_broadcasts,
                 (COUNT(*) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL))::int AS slots_recovered,
                 COALESCE(SUM(slot_value_pence), 0)::int AS total_revenue_at_risk_pence,
-                COALESCE(SUM(slot_value_pence) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL), 0)::int AS total_revenue_saved_pence,
-                AVG(slot_value_pence) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL)::float AS average_recovered_slot_value_pence
+                COALESCE(SUM(slot_value_pence) FILTER (WHERE status = 'locked' OR accepted_by IS NOT NULL), 0)::int AS total_revenue_saved_pence
             FROM waitlist_slots
             WHERE clinic_id = $1;
             """,
@@ -2206,43 +2206,77 @@ async def api_analytics_summary(request: Request):
                 (COUNT(*) FILTER (WHERE status = 'booked'))::int AS booked_appointments,
                 (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_appointments,
                 (COUNT(*) FILTER (WHERE status = 'cancelled'))::int AS cancelled_appointments,
-                (COUNT(*) FILTER (WHERE status = 'no_show'))::int AS no_show_appointments,
-                COALESCE(SUM(slot_value_pence) FILTER (WHERE status = 'completed'), 0)::int AS total_completed_revenue_pence
+                (COUNT(*) FILTER (WHERE status = 'no_show'))::int AS no_show_appointments
             FROM appointments
             WHERE clinic_id = $1;
             """,
             clinic_uuid,
         )
+        # Pull all patients (including archived/not-archived) to perform a safe in-memory scan
+        patient_rows = await conn.fetch(
+            """
+            SELECT first_name, last_name, email, accepted_count, declined_count, offer_count, lifecycle_status, last_response_at
+            FROM patients
+            WHERE clinic_id = $1;
+            """,
+            clinic_uuid,
+        )
 
+    # Calculate total broadcasts and recovery rate
     total_broadcasts = slot_summary["total_broadcasts"] if slot_summary else 0
     slots_recovered = slot_summary["slots_recovered"] if slot_summary else 0
-    recovery_rate = round((slots_recovered / total_broadcasts) * 100, 1) if total_broadcasts else 0.0
+    recovery_rate = round((slots_recovered / total_broadcasts) * 100, 1) if total_broadcasts > 0 else 0.0
+
+    # Process most responsive patient with tie-breaker
+    responsive_candidates = [p for p in patient_rows if p["accepted_count"] > 0]
+    if responsive_candidates:
+        def sort_key(p):
+            acc = p["accepted_count"]
+            dec = p["declined_count"]
+            off = p["offer_count"]
+            engagement = (acc + dec) / off if off > 0 else 0.0
+            return (acc, engagement)
+
+        best_patient = max(responsive_candidates, key=sort_key)
+        name = f"{best_patient['first_name']} {best_patient['last_name'] or ''}".strip()
+        most_responsive_patient = {
+            "name": name if name else best_patient["email"],
+            "email": best_patient["email"],
+            "accepted_count": best_patient["accepted_count"]
+        }
+    else:
+        most_responsive_patient = None
+
+    # Process no response history count (including archived records)
+    no_response_history_count = sum(
+        1 for p in patient_rows
+        if p["lifecycle_status"] == "waitlist"
+        and p["last_response_at"] is None
+        and p["accepted_count"] == 0
+        and p["declined_count"] == 0
+    )
+
     avg_response = offer_summary["avg_response_minutes"] if offer_summary else None
-    avg_recovered_value = slot_summary["average_recovered_slot_value_pence"] if slot_summary else None
 
     return {
-        "total_broadcasts": total_broadcasts,
-        "offers_sent": offer_summary["offers_sent"] if offer_summary else 0,
-        "slots_recovered": slots_recovered,
         "recovery_rate": recovery_rate,
+        "avg_response_minutes": round(avg_response, 1) if avg_response is not None else None,
+        "total_revenue_saved_pence": slot_summary["total_revenue_saved_pence"] if slot_summary else 0,
+        "total_revenue_at_risk_pence": slot_summary["total_revenue_at_risk_pence"] if slot_summary else 0,
         "accepted_offers": offer_summary["accepted_offers"] if offer_summary else 0,
         "declined_offers": offer_summary["declined_offers"] if offer_summary else 0,
         "expired_offers": offer_summary["expired_offers"] if offer_summary else 0,
         "pending_offers": offer_summary["pending_offers"] if offer_summary else 0,
-        "avg_response_minutes": round(avg_response, 1) if avg_response is not None else None,
-        "total_revenue_saved_pence": slot_summary["total_revenue_saved_pence"] if slot_summary else 0,
-        "total_revenue_at_risk_pence": slot_summary["total_revenue_at_risk_pence"] if slot_summary else 0,
-        "average_recovered_slot_value_pence": round(avg_recovered_value) if avg_recovered_value is not None else None,
         "booked_appointments": appointment_summary["booked_appointments"] if appointment_summary else 0,
         "completed_appointments": appointment_summary["completed_appointments"] if appointment_summary else 0,
         "cancelled_appointments": appointment_summary["cancelled_appointments"] if appointment_summary else 0,
         "no_show_appointments": appointment_summary["no_show_appointments"] if appointment_summary else 0,
-        "total_completed_revenue_pence": appointment_summary["total_completed_revenue_pence"] if appointment_summary else 0,
         "top_clinicians": [
             {"clinician": row["clinician"], "recovered": row["recovered"]}
             for row in top_rows
         ],
-        "total_revenue_saved": None,
+        "most_responsive_patient": most_responsive_patient,
+        "no_response_history_count": no_response_history_count,
     }
 
 
