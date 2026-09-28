@@ -3584,7 +3584,7 @@ async def accept_offer(token: str, request: Request, background_tasks: Backgroun
 
             if slot["status"] == "locked":
                 return HTMLResponse(
-                    f"<h1>This slot is already locked.</h1><p>Accepted by {slot['accepted_by']}.</p>",
+                    "<h1>This slot is already locked.</h1><p>This appointment slot has already been claimed by another patient.</p>",
                     status_code=409,
                 )
 
