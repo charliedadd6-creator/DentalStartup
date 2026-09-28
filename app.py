@@ -3387,22 +3387,37 @@ async def api_debug_slot(slot_id: str, request: Request):
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
 async def view_offer(token: str, request: Request) -> HTMLResponse:
-    offer_id = verify_secure_token(token)
+    pool: asyncpg.Pool = request.app.state.pool
+    max_age_seconds = 14400
+    offer = None
+    clinic_settings = None
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        candidate_offer_id = decoded.split(":")[0]
+        offer = await db_get_offer_with_slot(pool, candidate_offer_id)
+        if offer:
+            clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
+            max_age_seconds = clinic_settings["default_expiry_minutes"] * 60
+    except Exception:
+        pass
+
+    offer_id = verify_secure_token(token, max_age_seconds=max_age_seconds)
     if not offer_id:
         return HTMLResponse(
             "<h1>Link Expired or Invalid</h1><p>This invitation is no longer valid.</p>",
             status_code=400,
         )
 
-    pool: asyncpg.Pool = request.app.state.pool
-    offer = await db_get_offer_with_slot(pool, offer_id)
+    if not offer:
+        offer = await db_get_offer_with_slot(pool, offer_id)
     if not offer:
         return HTMLResponse(
             "<h1>Offer Not Found</h1><p>This appointment offer may have expired.</p>",
             status_code=404,
         )
 
-    clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
+    if not clinic_settings:
+        clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
     clinic_name = html.escape(clinic_settings["clinic_name"])
     slot_time = offer["slot_time"].astimezone(timezone.utc).strftime("%A %d %B at %H:%M UTC")
     clinician = html.escape(offer["clinician"] or "your clinician")
