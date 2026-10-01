@@ -17,6 +17,8 @@ async def create_db_pool(settings) -> asyncpg.Pool:
         dsn=settings.database_url,
         min_size=settings.db_min_size,
         max_size=settings.db_max_size,
+        command_timeout=10,
+        max_inactive_connection_lifetime=300,
     )
     async with pool.acquire() as conn:
         await conn.fetchval("SELECT 1")

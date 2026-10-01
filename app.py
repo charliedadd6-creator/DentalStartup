@@ -592,7 +592,7 @@ async def log_clinical_event(
 
 async def get_clinic_settings(pool: asyncpg.Pool, clinic_id: str) -> dict:
     clinic_uuid = uuid.UUID(str(clinic_id))
-    async with pool.acquire() as conn:
+    async with pool.acquire(timeout=2) as conn:
         row = await conn.fetchrow(
             """
             SELECT
@@ -3389,27 +3389,32 @@ async def api_debug_slot(slot_id: str, request: Request):
 async def view_offer(token: str, request: Request) -> HTMLResponse:
     pool: asyncpg.Pool = request.app.state.pool
     max_age_seconds = 14400
-    offer = None
-    clinic_settings = None
-    try:
-        decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
-        candidate_offer_id = decoded.split(":")[0]
-        offer = await db_get_offer_with_slot(pool, candidate_offer_id)
-        if offer:
-            clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
-            max_age_seconds = clinic_settings["default_expiry_minutes"] * 60
-    except Exception:
-        pass
-
-    offer_id = verify_secure_token(token, max_age_seconds=max_age_seconds)
+    offer_id = verify_secure_token(token, max_age_seconds=86400)
     if not offer_id:
         return HTMLResponse(
             "<h1>Link Expired or Invalid</h1><p>This invitation is no longer valid.</p>",
             status_code=400,
         )
 
-    if not offer:
+    offer = None
+    clinic_settings = None
+    try:
         offer = await db_get_offer_with_slot(pool, offer_id)
+        if offer:
+            try:
+                clinic_settings = await get_clinic_settings(pool, str(offer["clinic_id"]))
+                max_age_seconds = clinic_settings["default_expiry_minutes"] * 60
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if not verify_secure_token(token, max_age_seconds=max_age_seconds):
+        return HTMLResponse(
+            "<h1>Link Expired or Invalid</h1><p>This invitation is no longer valid.</p>",
+            status_code=400,
+        )
+
     if not offer:
         return HTMLResponse(
             "<h1>Offer Not Found</h1><p>This appointment offer may have expired.</p>",
@@ -3834,7 +3839,7 @@ async def db_get_offer_with_slot(pool: asyncpg.Pool, offer_id: str) -> asyncpg.R
         parsed = uuid.UUID(offer_id)
     except ValueError:
         return None
-    async with pool.acquire() as conn:
+    async with pool.acquire(timeout=2) as conn:
         return await conn.fetchrow(
             """
             SELECT
