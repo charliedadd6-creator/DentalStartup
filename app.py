@@ -1226,7 +1226,6 @@ async def sync_patient_lifecycle_for_appointment(
             UPDATE patients
             SET lifecycle_status = 'completed',
                 completed_at = COALESCE(completed_at, $3),
-                archived_at = COALESCE(archived_at, $3),
                 updated_at = $3
             WHERE id = $1 AND clinic_id = $2
             """,
